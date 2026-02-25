@@ -204,7 +204,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.onKeyUp = { [weak self] in
             self?.endRecording()
         }
-        hotkeyManager.start()
+        let started = hotkeyManager.start()
+        if !started {
+            showAccessibilityPermissionAlert()
+        }
     }
 
     private func beginRecording() {
@@ -362,6 +365,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Quit")
         if alert.runModal() == .alertFirstButtonReturn {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!)
+        }
+        NSApp.terminate(nil)
+    }
+
+    private func showAccessibilityPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Accessibility Permission Required"
+        alert.informativeText = "Kaze needs Accessibility access to detect the ⌥⌘ hotkey system-wide. Please enable Kaze in System Settings → Privacy & Security → Accessibility, then relaunch the app."
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Quit")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
         }
         NSApp.terminate(nil)
     }

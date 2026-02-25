@@ -18,7 +18,18 @@ class HotkeyManager {
     private let optionFlagMask: CGEventFlags = .maskAlternate
     private let commandFlagMask: CGEventFlags = .maskCommand
 
-    func start() {
+    /// `true` if the event tap was successfully created (i.e. Accessibility permission is granted).
+    private(set) var isAccessibilityGranted = false
+
+    /// Returns `true` if the app currently has Accessibility permission.
+    static func checkAccessibilityPermission() -> Bool {
+        return AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
+        )
+    }
+
+    @discardableResult
+    func start() -> Bool {
         let eventMask: CGEventMask =
             (1 << CGEventType.flagsChanged.rawValue)
 
@@ -36,13 +47,16 @@ class HotkeyManager {
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             print("[HotkeyManager] Failed to create event tap. Grant Accessibility permission.")
-            return
+            isAccessibilityGranted = false
+            return false
         }
 
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        isAccessibilityGranted = true
+        return true
     }
 
     func stop() {
