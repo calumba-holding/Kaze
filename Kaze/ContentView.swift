@@ -410,7 +410,7 @@ private struct HistorySettingsView: View {
                     .truncationMode(.tail)
 
                 HStack(spacing: 6) {
-                    Text(record.timestamp, style: .relative)
+                    Text(record.timestamp.relativeString)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
 

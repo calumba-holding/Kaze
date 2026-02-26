@@ -85,3 +85,41 @@ class TranscriptionHistoryManager: ObservableObject {
         }
     }
 }
+
+// MARK: - Static Relative Date Formatting
+
+extension Date {
+    /// Returns a static relative string like "Just now", "3 min ago", "2 hr ago", "Yesterday", etc.
+    /// Unlike SwiftUI's `Text(_:style: .relative)`, this does not live-update.
+    var relativeString: String {
+        let now = Date()
+        let seconds = Int(now.timeIntervalSince(self))
+
+        if seconds < 60 {
+            return "Just now"
+        }
+
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes) min ago"
+        }
+
+        let hours = minutes / 60
+        if hours < 24 {
+            return "\(hours) hr ago"
+        }
+
+        let days = hours / 24
+        if days == 1 {
+            return "Yesterday"
+        }
+        if days < 7 {
+            return "\(days) days ago"
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: self)
+    }
+}

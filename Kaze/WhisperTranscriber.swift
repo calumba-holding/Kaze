@@ -101,18 +101,21 @@ class WhisperModelManager: ObservableObject {
     }
 
     func checkExistingModel() {
-        let modelDir = modelDirectory
         let fm = FileManager.default
 
-        // Look for any subfolder that contains the model files
+        // Most reliable check: we stored the model path after a successful download
+        if let storedPath = UserDefaults.standard.string(forKey: modelPathKey),
+           fm.fileExists(atPath: storedPath) {
+            state = .downloaded
+            return
+        }
+
+        // Fallback: scan the variant directory for model files
+        let modelDir = modelDirectory
         if let contents = try? fm.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil),
-           contents.contains(where: { url in
-               let name = url.lastPathComponent.lowercased()
-               return name.contains("whisper") && url.hasDirectoryPath
-           }) {
+           contents.contains(where: { $0.hasDirectoryPath && $0.lastPathComponent.lowercased().contains("whisper") }) {
             state = .downloaded
         } else {
-            // Also check if WhisperKit's default download location has it
             let hubDir = modelDir.appendingPathComponent("huggingface")
             if fm.fileExists(atPath: hubDir.path) {
                 state = .downloaded
