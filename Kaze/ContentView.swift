@@ -28,6 +28,8 @@ private enum SettingsTab: String, CaseIterable {
 
 struct ContentView: View {
     @ObservedObject var whisperModelManager: WhisperModelManager
+    @ObservedObject var parakeetModelManager: FluidAudioModelManager
+    @ObservedObject var qwenModelManager: FluidAudioModelManager
     @ObservedObject var historyManager: TranscriptionHistoryManager
     @ObservedObject var customWordsManager: CustomWordsManager
 
@@ -44,7 +46,11 @@ struct ContentView: View {
             Group {
                 switch selectedTab {
                 case .general:
-                    GeneralSettingsView(whisperModelManager: whisperModelManager)
+                    GeneralSettingsView(
+                        whisperModelManager: whisperModelManager,
+                        parakeetModelManager: parakeetModelManager,
+                        qwenModelManager: qwenModelManager
+                    )
                 case .vocabulary:
                     VocabularySettingsView(customWordsManager: customWordsManager)
                 case .history:
@@ -96,6 +102,8 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
 
     @ObservedObject var whisperModelManager: WhisperModelManager
+    @ObservedObject var parakeetModelManager: FluidAudioModelManager
+    @ObservedObject var qwenModelManager: FluidAudioModelManager
 
     private var selectedEngine: TranscriptionEngine {
         TranscriptionEngine(rawValue: engineRaw) ?? .dictation
@@ -125,6 +133,13 @@ private struct GeneralSettingsView: View {
                     .labelsHidden()
                 }
 
+                // Engine description
+                formRow("") {
+                    Text(selectedEngine.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if selectedEngine == .whisper {
                     formRow("Whisper model:") {
                         Picker("Model", selection: Binding(
@@ -145,6 +160,28 @@ private struct GeneralSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             whisperModelStatusRow
+                        }
+                    }
+                }
+
+                if selectedEngine == .parakeet {
+                    formRow("") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(FluidAudioModel.parakeet.qualityDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
+                        }
+                    }
+                }
+
+                if selectedEngine == .qwen {
+                    formRow("") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(FluidAudioModel.qwen.qualityDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            fluidAudioModelStatusRow(manager: qwenModelManager, model: .qwen)
                         }
                     }
                 }
@@ -342,6 +379,117 @@ private struct GeneralSettingsView: View {
             return false
         }
     }
+
+    // MARK: - FluidAudio Model Status (Parakeet / Qwen)
+
+    @ViewBuilder
+    private func fluidAudioModelStatusRow(manager: FluidAudioModelManager, model: FluidAudioModel) -> some View {
+        switch manager.state {
+        case .notDownloaded:
+            HStack(spacing: 8) {
+                Text("Not downloaded (\(model.sizeDescription))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Download") {
+                    Task { await manager.downloadModel() }
+                }
+                .controlSize(.small)
+            }
+
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                if progress < 0 {
+                    // Indeterminate progress (FluidAudio doesn't expose granular progress)
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Downloading...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView(value: progress)
+                        .frame(maxWidth: 140)
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+        case .downloaded:
+            HStack(spacing: 8) {
+                Label {
+                    HStack(spacing: 4) {
+                        Text("Downloaded")
+                        if !manager.modelSizeOnDisk.isEmpty {
+                            Text("(\(manager.modelSizeOnDisk))")
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Remove", role: .destructive) {
+                    manager.deleteModel()
+                    engineRaw = TranscriptionEngine.dictation.rawValue
+                }
+                .controlSize(.small)
+            }
+
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .ready:
+            HStack(spacing: 8) {
+                Label {
+                    HStack(spacing: 4) {
+                        Text("Ready")
+                        if !manager.modelSizeOnDisk.isEmpty {
+                            Text("(\(manager.modelSizeOnDisk))")
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Remove", role: .destructive) {
+                    manager.deleteModel()
+                    engineRaw = TranscriptionEngine.dictation.rawValue
+                }
+                .controlSize(.small)
+            }
+
+        case .error(let message):
+            HStack(spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+
+                Button("Retry") {
+                    manager.deleteModel()
+                    Task { await manager.downloadModel() }
+                }
+                .controlSize(.small)
+            }
+        }
+    }
 }
 
 // MARK: - History Tab
@@ -403,7 +551,7 @@ private struct HistorySettingsView: View {
 
     private func historyRow(for record: TranscriptionRecord) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: record.engine == "whisper" ? "waveform" : "mic.fill")
+            Image(systemName: historyIconName(for: record.engine))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(width: 16, alignment: .center)
@@ -447,6 +595,15 @@ private struct HistorySettingsView: View {
             .help("Copy to clipboard")
         }
         .padding(.vertical, 8)
+    }
+
+    private func historyIconName(for engine: String) -> String {
+        switch engine {
+        case "whisper": return "waveform"
+        case "parakeet": return "bird"
+        case "qwen": return "brain.head.profile"
+        default: return "mic.fill"
+        }
     }
 }
 

@@ -4,6 +4,8 @@ import AppKit
 enum TranscriptionEngine: String, CaseIterable, Identifiable {
     case dictation
     case whisper
+    case parakeet
+    case qwen
 
     var id: String { rawValue }
 
@@ -11,6 +13,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .dictation: return "Direct Dictation"
         case .whisper: return "Whisper (OpenAI)"
+        case .parakeet: return "Parakeet v3 (NVIDIA)"
+        case .qwen: return "Qwen3 ASR (Alibaba)"
         }
     }
 
@@ -18,6 +22,16 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .dictation: return "Uses Apple's built-in speech recognition. Works immediately with no setup."
         case .whisper: return "Uses OpenAI's Whisper model running locally on your Mac. Requires a one-time download."
+        case .parakeet: return "NVIDIA's Parakeet TDT 0.6B v3 via CoreML. Top-ranked accuracy, blazing fast. English only."
+        case .qwen: return "Alibaba's Qwen3 ASR 0.6B via CoreML. Fast multilingual transcription with 30+ languages."
+        }
+    }
+
+    /// Whether this engine requires a model download before use.
+    var requiresModelDownload: Bool {
+        switch self {
+        case .dictation: return false
+        case .whisper, .parakeet, .qwen: return true
         }
     }
 }
@@ -63,6 +77,7 @@ enum AppPreferenceKey {
     static let enhancementSystemPrompt = "enhancementSystemPrompt"
     static let hotkeyMode = "hotkeyMode"
     static let whisperModelVariant = "whisperModelVariant"
+    static let fluidAudioModelState = "fluidAudioModelState"
 
     static let defaultEnhancementPrompt = """
         You are Kaze, a speech-to-text transcription assistant. Your only job is to \
@@ -79,8 +94,14 @@ struct KazeApp: App {
 
     var body: some Scene {
         Settings {
-            ContentView(whisperModelManager: appDelegate.whisperModelManager, historyManager: appDelegate.historyManager, customWordsManager: appDelegate.customWordsManager)
-                .frame(minWidth: 480, maxWidth: 520)
+            ContentView(
+                whisperModelManager: appDelegate.whisperModelManager,
+                parakeetModelManager: appDelegate.parakeetModelManager,
+                qwenModelManager: appDelegate.qwenModelManager,
+                historyManager: appDelegate.historyManager,
+                customWordsManager: appDelegate.customWordsManager
+            )
+            .frame(minWidth: 480, maxWidth: 520)
         }
     }
 }
@@ -91,7 +112,10 @@ struct KazeApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private let speechTranscriber = SpeechTranscriber()
     private var whisperTranscriber: WhisperTranscriber?
+    private var fluidAudioTranscriber: FluidAudioTranscriber?
     let whisperModelManager = WhisperModelManager()
+    let parakeetModelManager = FluidAudioModelManager(model: .parakeet)
+    let qwenModelManager = FluidAudioModelManager(model: .qwen)
     let historyManager = TranscriptionHistoryManager()
     let customWordsManager = CustomWordsManager()
 
@@ -146,7 +170,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 whisperTranscriber = WhisperTranscriber(modelManager: whisperModelManager)
             }
             return whisperTranscriber
+        case .parakeet:
+            return getOrCreateFluidAudioTranscriber(model: .parakeet, manager: parakeetModelManager)
+        case .qwen:
+            return getOrCreateFluidAudioTranscriber(model: .qwen, manager: qwenModelManager)
         }
+    }
+
+    private func getOrCreateFluidAudioTranscriber(model: FluidAudioModel, manager: FluidAudioModelManager) -> FluidAudioTranscriber {
+        if let existing = fluidAudioTranscriber, existing.model == model {
+            return existing
+        }
+        let transcriber = FluidAudioTranscriber(model: model, modelManager: manager)
+        fluidAudioTranscriber = transcriber
+        return transcriber
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -210,8 +247,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let contentView = ContentView(whisperModelManager: whisperModelManager, historyManager: historyManager, customWordsManager: customWordsManager)
-            .frame(minWidth: 480, maxWidth: 520)
+        let contentView = ContentView(
+            whisperModelManager: whisperModelManager,
+            parakeetModelManager: parakeetModelManager,
+            qwenModelManager: qwenModelManager,
+            historyManager: historyManager,
+            customWordsManager: customWordsManager
+        )
+        .frame(minWidth: 480, maxWidth: 520)
         let hostingController = NSHostingController(rootView: contentView)
 
         let window = NSWindow(
@@ -259,15 +302,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func beginRecording() {
         guard !isSessionActive else { return }
 
-        // If Whisper is selected but the model isn't downloaded yet, fall back to dictation
-        if transcriptionEngine == .whisper {
-            let modelState = whisperModelManager.state
-            if case .notDownloaded = modelState {
-                print("Whisper model not downloaded, falling back to Direct Dictation")
-                // Still proceed with dictation for this session
-            } else if case .error = modelState {
-                print("Whisper model in error state, falling back to Direct Dictation")
-            }
+        let engine = transcriptionEngine
+
+        // Check if the selected engine's model is available
+        if engine.requiresModelDownload && !isEngineReady(engine) {
+            print("\(engine.title) model not ready, falling back to Direct Dictation")
         }
 
         isSessionActive = true
@@ -276,7 +315,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let words = customWordsManager.words
 
         // Use the appropriate transcriber
-        if transcriptionEngine == .whisper, isWhisperReady {
+        if engine == .whisper, isEngineReady(.whisper) {
             let whisper = whisperTranscriber ?? WhisperTranscriber(modelManager: whisperModelManager)
             whisperTranscriber = whisper
             whisper.customWords = words
@@ -287,6 +326,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             overlayState.bind(to: whisper)
             overlayWindow.show(state: overlayState)
             whisper.startRecording()
+        } else if (engine == .parakeet || engine == .qwen), isEngineReady(engine) {
+            let manager = engine == .parakeet ? parakeetModelManager : qwenModelManager
+            let model: FluidAudioModel = engine == .parakeet ? .parakeet : .qwen
+            let transcriber = getOrCreateFluidAudioTranscriber(model: model, manager: manager)
+            transcriber.onTranscriptionFinished = { [weak self] (text: String) in
+                guard let self else { return }
+                self.processTranscription(text)
+            }
+            overlayState.bind(to: transcriber)
+            overlayWindow.show(state: overlayState)
+            transcriber.startRecording()
         } else {
             speechTranscriber.customWords = words
             speechTranscriber.onTranscriptionFinished = { [weak self] (text: String) in
@@ -299,24 +349,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Whether the Whisper model is downloaded and available for use.
-    private var isWhisperReady: Bool {
-        switch whisperModelManager.state {
-        case .downloaded, .ready, .loading:
+    /// Whether the given engine's model is downloaded and available for use.
+    private func isEngineReady(_ engine: TranscriptionEngine) -> Bool {
+        switch engine {
+        case .dictation:
             return true
-        default:
-            return false
+        case .whisper:
+            switch whisperModelManager.state {
+            case .downloaded, .ready, .loading:
+                return true
+            default:
+                return false
+            }
+        case .parakeet:
+            switch parakeetModelManager.state {
+            case .downloaded, .ready, .loading:
+                return true
+            default:
+                return false
+            }
+        case .qwen:
+            switch qwenModelManager.state {
+            case .downloaded, .ready, .loading:
+                return true
+            default:
+                return false
+            }
         }
     }
 
     private func endRecording() {
         guard isSessionActive else { return }
 
-        if transcriptionEngine == .whisper, isWhisperReady {
+        let engine = transcriptionEngine
+
+        if engine == .whisper, isEngineReady(.whisper) {
             whisperTranscriber?.stopRecording()
             // For Whisper, transcription happens after stop — the overlay stays visible
             // until onTranscriptionFinished fires via processTranscription
             overlayState.isEnhancing = true // Show processing state while Whisper works
+        } else if (engine == .parakeet || engine == .qwen), isEngineReady(engine) {
+            fluidAudioTranscriber?.stopRecording()
+            // FluidAudio models also transcribe after stop
+            overlayState.isEnhancing = true
         } else {
             speechTranscriber.stopRecording()
             let waitingForAI = enhancementMode == .appleIntelligence && enhancer != nil
@@ -343,19 +418,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if enhancementMode == .appleIntelligence, let enhancer {
             overlayState.isEnhancing = true
-            if transcriptionEngine == .whisper {
-                whisperTranscriber?.isEnhancing = true
-            } else {
-                speechTranscriber.isEnhancing = true
-            }
+            setEnhancingState(true)
             Task {
                 defer {
                     self.overlayState.isEnhancing = false
-                    if self.transcriptionEngine == .whisper {
-                        self.whisperTranscriber?.isEnhancing = false
-                    } else {
-                        self.speechTranscriber.isEnhancing = false
-                    }
+                    self.setEnhancingState(false)
                     self.overlayWindow.hide()
                     self.isSessionActive = false
                 }
@@ -394,6 +461,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
             overlayWindow.hide()
             isSessionActive = false
+        }
+    }
+
+    private func setEnhancingState(_ enhancing: Bool) {
+        switch transcriptionEngine {
+        case .whisper:
+            whisperTranscriber?.isEnhancing = enhancing
+        case .parakeet, .qwen:
+            fluidAudioTranscriber?.isEnhancing = enhancing
+        case .dictation:
+            speechTranscriber.isEnhancing = enhancing
         }
     }
 

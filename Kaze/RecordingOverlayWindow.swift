@@ -30,6 +30,15 @@ class OverlayState: ObservableObject {
         transcriber.$isEnhancing.assign(to: &$isEnhancing)
     }
 
+    /// Binds to a FluidAudioTranscriber's published properties.
+    func bind(to transcriber: FluidAudioTranscriber) {
+        cancellables.removeAll()
+        transcriber.$isRecording.assign(to: &$isRecording)
+        transcriber.$audioLevel.assign(to: &$audioLevel)
+        transcriber.$transcribedText.assign(to: &$transcribedText)
+        transcriber.$isEnhancing.assign(to: &$isEnhancing)
+    }
+
     func reset() {
         isRecording = false
         audioLevel = 0

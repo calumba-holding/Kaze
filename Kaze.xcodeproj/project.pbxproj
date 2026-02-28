@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		31WHISPER022F4D76D200E96913 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 31WHISPER012F4D76D200E96913 /* WhisperKit */; };
+		31FLUID0022F4D76D200E96913 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 31FLUID0012F4D76D200E96913 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				31WHISPER022F4D76D200E96913 /* WhisperKit in Frameworks */,
+				31FLUID0022F4D76D200E96913 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			name = Kaze;
 			packageProductDependencies = (
 				31WHISPER012F4D76D200E96913 /* WhisperKit */,
+				31FLUID0012F4D76D200E96913 /* FluidAudio */,
 			);
 			productName = Kaze;
 			productReference = 31F19CCD2F4D76D200E96913 /* Kaze.app */;
@@ -102,6 +105,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				31WHISPER002F4D76D200E96913 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				31FLUID0002F4D76D200E96913 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 31F19CCE2F4D76D200E96913 /* Products */;
@@ -364,6 +368,14 @@
 				minimumVersion = 0.15.0;
 			};
 		};
+		31FLUID0002F4D76D200E96913 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -371,6 +383,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 31WHISPER002F4D76D200E96913 /* XCRemoteSwiftPackageReference "WhisperKit" */;
 			productName = WhisperKit;
+		};
+		31FLUID0012F4D76D200E96913 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 31FLUID0002F4D76D200E96913 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
