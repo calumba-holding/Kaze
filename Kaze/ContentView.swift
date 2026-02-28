@@ -133,54 +133,37 @@ private struct GeneralSettingsView: View {
                     .labelsHidden()
                 }
 
-                // Engine description
+                // Engine details card: description + model controls + status
                 formRow("") {
-                    Text(selectedEngine.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(selectedEngine.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
-                if selectedEngine == .whisper {
-                    formRow("Whisper model:") {
-                        Picker("Model", selection: Binding(
-                            get: { whisperModelManager.selectedVariant },
-                            set: { whisperModelManager.selectedVariant = $0 }
-                        )) {
-                            ForEach(WhisperModelVariant.allCases) { variant in
-                                Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
+                        if selectedEngine == .whisper {
+                            Picker("Model", selection: Binding(
+                                get: { whisperModelManager.selectedVariant },
+                                set: { whisperModelManager.selectedVariant = $0 }
+                            )) {
+                                ForEach(WhisperModelVariant.allCases) { variant in
+                                    Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
+                                }
                             }
-                        }
-                        .labelsHidden()
-                        .disabled(isModelBusy)
-                    }
+                            .labelsHidden()
+                            .disabled(isModelBusy)
 
-                    formRow("") {
-                        VStack(alignment: .leading, spacing: 4) {
                             Text(whisperModelManager.selectedVariant.qualityDescription)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.tertiary)
+
                             whisperModelStatusRow
                         }
-                    }
-                }
 
-                if selectedEngine == .parakeet {
-                    formRow("") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(FluidAudioModel.parakeet.qualityDescription)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if selectedEngine == .parakeet {
                             fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
                         }
-                    }
-                }
 
-                if selectedEngine == .qwen {
-                    formRow("") {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(FluidAudioModel.qwen.qualityDescription)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if selectedEngine == .qwen {
                             fluidAudioModelStatusRow(manager: qwenModelManager, model: .qwen)
                         }
                     }
