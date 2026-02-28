@@ -288,14 +288,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showAccessibilityPermissionAlert()
         }
 
-        // Observe changes to hotkey mode preference so it updates at runtime
+        // Observe changes to hotkey mode preference (Fix #6: early-exit avoids
+        // unnecessary work when unrelated UserDefaults keys change)
         hotkeyModeObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            self.hotkeyManager.mode = self.hotkeyMode
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let newMode = self.hotkeyMode
+                guard self.hotkeyManager.mode != newMode else { return }
+                self.hotkeyManager.mode = newMode
+            }
         }
     }
 

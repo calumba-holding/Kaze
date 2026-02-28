@@ -12,31 +12,35 @@ class OverlayState: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
+    /// Fix #9: Use sink + store(in:) instead of assign(to: &$prop) so that
+    /// cancellables.removeAll() actually cancels subscriptions from the previous transcriber.
+    /// assign(to: &$property) ties lifetime to the Published property and ignores cancellables.
+
     /// Binds to a SpeechTranscriber's published properties.
     func bind(to transcriber: SpeechTranscriber) {
         cancellables.removeAll()
-        transcriber.$isRecording.assign(to: &$isRecording)
-        transcriber.$audioLevel.assign(to: &$audioLevel)
-        transcriber.$transcribedText.assign(to: &$transcribedText)
-        transcriber.$isEnhancing.assign(to: &$isEnhancing)
+        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
+        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
+        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
+        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
     }
 
     /// Binds to a WhisperTranscriber's published properties.
     func bind(to transcriber: WhisperTranscriber) {
         cancellables.removeAll()
-        transcriber.$isRecording.assign(to: &$isRecording)
-        transcriber.$audioLevel.assign(to: &$audioLevel)
-        transcriber.$transcribedText.assign(to: &$transcribedText)
-        transcriber.$isEnhancing.assign(to: &$isEnhancing)
+        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
+        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
+        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
+        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
     }
 
     /// Binds to a FluidAudioTranscriber's published properties.
     func bind(to transcriber: FluidAudioTranscriber) {
         cancellables.removeAll()
-        transcriber.$isRecording.assign(to: &$isRecording)
-        transcriber.$audioLevel.assign(to: &$audioLevel)
-        transcriber.$transcribedText.assign(to: &$transcribedText)
-        transcriber.$isEnhancing.assign(to: &$isEnhancing)
+        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
+        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
+        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
+        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
     }
 
     func reset() {

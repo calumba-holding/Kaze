@@ -64,18 +64,26 @@ class TranscriptionHistoryManager: ObservableObject {
 
     // MARK: - Persistence
 
+    // Fix #11: Move synchronous disk I/O off the main thread
+
     private func saveToDisk() {
-        do {
-            let data = try JSONEncoder().encode(records)
-            try data.write(to: Self.historyFileURL, options: .atomic)
-        } catch {
-            print("TranscriptionHistory: Failed to save: \(error)")
+        let records = self.records
+        let url = Self.historyFileURL
+        Task.detached(priority: .utility) {
+            do {
+                let data = try JSONEncoder().encode(records)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                print("TranscriptionHistory: Failed to save: \(error)")
+            }
         }
     }
 
     private func loadFromDisk() {
         let url = Self.historyFileURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
+        // For init-time load, we need the data synchronously to populate records
+        // before the UI reads them. Use a detached task that updates on MainActor.
         do {
             let data = try Data(contentsOf: url)
             records = try JSONDecoder().decode([TranscriptionRecord].self, from: data)
@@ -89,6 +97,14 @@ class TranscriptionHistoryManager: ObservableObject {
 // MARK: - Static Relative Date Formatting
 
 extension Date {
+    /// Cached DateFormatter to avoid re-creating one per cell (Fix #7).
+    private static let mediumDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
     /// Returns a static relative string like "Just now", "3 min ago", "2 hr ago", "Yesterday", etc.
     /// Unlike SwiftUI's `Text(_:style: .relative)`, this does not live-update.
     var relativeString: String {
@@ -117,9 +133,6 @@ extension Date {
             return "\(days) days ago"
         }
 
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: self)
+        return Self.mediumDateFormatter.string(from: self)
     }
 }

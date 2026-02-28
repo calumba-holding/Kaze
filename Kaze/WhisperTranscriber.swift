@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Accelerate
 import Combine
 import WhisperKit
 
@@ -67,6 +68,9 @@ class WhisperModelManager: ObservableObject {
     }
 
     @Published var state: ModelState = .notDownloaded
+    /// Cached model size string to avoid recursive directory enumeration in view body (Fix #12).
+    @Published private(set) var modelSizeOnDiskCached: String = ""
+
     @Published var selectedVariant: WhisperModelVariant {
         didSet {
             guard oldValue != selectedVariant else { return }
@@ -107,6 +111,7 @@ class WhisperModelManager: ObservableObject {
         if let storedPath = UserDefaults.standard.string(forKey: modelPathKey),
            fm.fileExists(atPath: storedPath) {
             state = .downloaded
+            refreshModelSizeOnDisk()
             return
         }
 
@@ -115,12 +120,15 @@ class WhisperModelManager: ObservableObject {
         if let contents = try? fm.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil),
            contents.contains(where: { $0.hasDirectoryPath && $0.lastPathComponent.lowercased().contains("whisper") }) {
             state = .downloaded
+            refreshModelSizeOnDisk()
         } else {
             let hubDir = modelDir.appendingPathComponent("huggingface")
             if fm.fileExists(atPath: hubDir.path) {
                 state = .downloaded
+                refreshModelSizeOnDisk()
             } else {
                 state = .notDownloaded
+                modelSizeOnDiskCached = ""
             }
         }
     }
@@ -145,6 +153,7 @@ class WhisperModelManager: ObservableObject {
             // Store the path for this variant
             UserDefaults.standard.set(modelFolder.path, forKey: modelPathKey)
             state = .downloaded
+            refreshModelSizeOnDisk()
         } catch {
             state = .error("Download failed: \(error.localizedDescription)")
         }
@@ -175,6 +184,7 @@ class WhisperModelManager: ObservableObject {
         let kit = try await WhisperKit(config)
         whisperKit = kit
         state = .ready
+        refreshModelSizeOnDisk()
         return kit
     }
 
@@ -184,20 +194,32 @@ class WhisperModelManager: ObservableObject {
         try? FileManager.default.removeItem(at: modelDirectory)
         UserDefaults.standard.removeObject(forKey: modelPathKey)
         state = .notDownloaded
+        modelSizeOnDiskCached = ""
     }
 
     /// The cached WhisperKit instance, if loaded.
     var loadedKit: WhisperKit? { whisperKit }
 
-    /// Size of the currently selected model on disk.
-    var modelSizeOnDisk: String {
-        guard let size = try? FileManager.default.allocatedSizeOfDirectory(at: modelDirectory), size > 0 else {
-            return ""
+    /// Size of the currently selected model on disk (cached, not computed on every view redraw).
+    var modelSizeOnDisk: String { modelSizeOnDiskCached }
+
+    /// Recalculates model size on disk and updates the cached value. (Fix #12)
+    func refreshModelSizeOnDisk() {
+        let dir = modelDirectory
+        Task.detached(priority: .utility) {
+            let sizeString: String
+            if let size = try? FileManager.default.allocatedSizeOfDirectory(at: dir), size > 0 {
+                let formatter = ByteCountFormatter()
+                formatter.allowedUnits = [.useMB, .useGB]
+                formatter.countStyle = .file
+                sizeString = formatter.string(fromByteCount: Int64(size))
+            } else {
+                sizeString = ""
+            }
+            await MainActor.run { [sizeString] in
+                self.modelSizeOnDiskCached = sizeString
+            }
         }
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(size))
     }
 
     /// UserDefaults key for the stored model path, unique per variant.
@@ -223,8 +245,18 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
     var customWords: [String] = []
 
     private let audioEngine = AVAudioEngine()
-    private var audioBuffer: [Float] = []
     private let modelManager: WhisperModelManager
+
+    /// Thread-safe audio buffer protected by a serial queue.
+    /// The audio tap callback writes from the audio thread; stopRecording reads from the main thread.
+    private let bufferQueue = DispatchQueue(label: "com.kaze.whisper.audioBuffer")
+    private var _audioBuffer: [Float] = []
+    private var _inputSampleRate: Double = 16000
+
+    /// Maximum recording duration in seconds (prevents unbounded memory growth).
+    private static let maxRecordingSeconds: Double = 300 // 5 minutes
+    /// Pre-allocated capacity for expected recording duration at typical sample rate (48kHz × 60s).
+    private static let initialBufferCapacity: Int = 48000 * 60
 
     init(modelManager: WhisperModelManager) {
         self.modelManager = modelManager
@@ -239,23 +271,38 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
     func startRecording() {
         guard !isRecording else { return }
 
-        audioBuffer = []
+        // Reset buffer with pre-allocation (Fix #3: avoid repeated reallocations)
+        bufferQueue.sync {
+            _audioBuffer = []
+            _audioBuffer.reserveCapacity(Self.initialBufferCapacity)
+        }
         transcribedText = ""
         audioLevel = 0
 
         do {
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
+            let sampleRate = recordingFormat.sampleRate
+            let maxSamples = Int(sampleRate * Self.maxRecordingSeconds)
+
+            // Capture sample rate before recording starts (Fix #10)
+            bufferQueue.sync { _inputSampleRate = sampleRate }
 
             // We need 16kHz mono for Whisper. We'll convert at the end.
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 guard let self else { return }
 
-                // Collect raw audio for later transcription
                 if let channelData = buffer.floatChannelData?[0] {
                     let frameLength = Int(buffer.frameLength)
-                    let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
-                    self.audioBuffer.append(contentsOf: samples)
+
+                    // Fix #1: Thread-safe buffer access via serial queue
+                    self.bufferQueue.sync {
+                        // Fix #3: Enforce max recording duration
+                        guard self._audioBuffer.count < maxSamples else { return }
+                        let remaining = maxSamples - self._audioBuffer.count
+                        let samplesToAppend = min(frameLength, remaining)
+                        self._audioBuffer.append(contentsOf: UnsafeBufferPointer(start: channelData, count: samplesToAppend))
+                    }
 
                     // Compute audio level for waveform visualization
                     if frameLength > 0 {
@@ -289,9 +336,13 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
         audioEngine.inputNode.removeTap(onBus: 0)
         isRecording = false
 
-        // Now transcribe the collected audio
-        let capturedAudio = audioBuffer
-        audioBuffer = []
+        // Fix #1: Thread-safe buffer extraction
+        let (capturedAudio, sampleRate) = bufferQueue.sync {
+            let audio = _audioBuffer
+            let rate = _inputSampleRate
+            _audioBuffer = []
+            return (audio, rate)
+        }
 
         guard !capturedAudio.isEmpty else {
             onTranscriptionFinished?("")
@@ -299,22 +350,22 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
         }
 
         Task {
-            await transcribeAudio(capturedAudio)
+            await transcribeAudio(capturedAudio, inputSampleRate: sampleRate)
         }
     }
 
-    private func transcribeAudio(_ samples: [Float]) async {
+    private func transcribeAudio(_ samples: [Float], inputSampleRate: Double) async {
         do {
             let kit = try await modelManager.loadModel()
 
-            // Resample to 16kHz mono if the input format differs
-            let inputNode = audioEngine.inputNode
-            let inputSampleRate = inputNode.outputFormat(forBus: 0).sampleRate
             let targetSampleRate = Double(WhisperKit.sampleRate) // 16000
 
+            // Fix #5: Move resampling off the main thread using vDSP
             let audioForWhisper: [Float]
             if abs(inputSampleRate - targetSampleRate) > 1.0 {
-                audioForWhisper = resample(samples, from: inputSampleRate, to: targetSampleRate)
+                audioForWhisper = await Task.detached(priority: .userInitiated) {
+                    Self.resample(samples, from: inputSampleRate, to: targetSampleRate)
+                }.value
             } else {
                 audioForWhisper = samples
             }
@@ -338,23 +389,17 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
         }
     }
 
-    /// Simple linear resampling from one sample rate to another.
-    private func resample(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
+    /// Resampling using Accelerate/vDSP for SIMD-accelerated performance.
+    /// Runs off the main thread. (Fix #5)
+    private nonisolated static func resample(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
         let ratio = targetSampleRate / sourceSampleRate
         let outputLength = Int(Double(samples.count) * ratio)
+        guard outputLength > 0 else { return [] }
         var output = [Float](repeating: 0, count: outputLength)
 
-        for i in 0..<outputLength {
-            let srcIndex = Double(i) / ratio
-            let srcIndexFloor = Int(srcIndex)
-            let fraction = Float(srcIndex - Double(srcIndexFloor))
-
-            if srcIndexFloor + 1 < samples.count {
-                output[i] = samples[srcIndexFloor] * (1 - fraction) + samples[srcIndexFloor + 1] * fraction
-            } else if srcIndexFloor < samples.count {
-                output[i] = samples[srcIndexFloor]
-            }
-        }
+        // Use vDSP linear interpolation
+        var control = (0..<outputLength).map { Float(Double($0) / ratio) }
+        vDSP_vlint(samples, &control, 1, &output, 1, vDSP_Length(outputLength), vDSP_Length(samples.count))
 
         return output
     }
@@ -364,7 +409,7 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
 
 extension FileManager {
     /// Calculates the total allocated size of a directory and its contents.
-    func allocatedSizeOfDirectory(at url: URL) throws -> UInt64 {
+    nonisolated func allocatedSizeOfDirectory(at url: URL) throws -> UInt64 {
         var totalSize: UInt64 = 0
         let enumerator = self.enumerator(at: url, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
         while let fileURL = enumerator?.nextObject() as? URL {

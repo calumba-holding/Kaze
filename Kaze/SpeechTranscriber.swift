@@ -127,9 +127,11 @@ class SpeechTranscriber: ObservableObject, TranscriberProtocol {
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
+        // Capture the request reference for thread-safe access in the audio tap callback
+        let capturedRequest = request
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.recognitionRequest?.append(buffer)
+            // SFSpeechAudioBufferRecognitionRequest.append is thread-safe
+            capturedRequest.append(buffer)
 
             guard let channelData = buffer.floatChannelData?[0] else { return }
             let frameLength = Int(buffer.frameLength)

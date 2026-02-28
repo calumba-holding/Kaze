@@ -50,18 +50,25 @@ class CustomWordsManager: ObservableObject {
 
     // MARK: - Persistence
 
+    // Fix #11: Move synchronous disk I/O off the main thread
+
     private func saveToDisk() {
-        do {
-            let data = try JSONEncoder().encode(words)
-            try data.write(to: Self.fileURL, options: .atomic)
-        } catch {
-            print("CustomWordsManager: Failed to save: \(error)")
+        let words = self.words
+        let url = Self.fileURL
+        Task.detached(priority: .utility) {
+            do {
+                let data = try JSONEncoder().encode(words)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                print("CustomWordsManager: Failed to save: \(error)")
+            }
         }
     }
 
     private func loadFromDisk() {
         let url = Self.fileURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
+        // For init-time load, keep synchronous so words are available immediately
         do {
             let data = try Data(contentsOf: url)
             words = try JSONDecoder().decode([String].self, from: data)

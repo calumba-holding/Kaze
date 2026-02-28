@@ -71,6 +71,9 @@ class FluidAudioModelManager: ObservableObject {
     }
 
     @Published var state: ModelState = .notDownloaded
+    /// Cached model size string to avoid recursive directory enumeration in view body (Fix #12).
+    @Published private(set) var modelSizeOnDiskCached: String = ""
+
     let model: FluidAudioModel
 
     // Loaded runtime objects
@@ -98,15 +101,19 @@ class FluidAudioModelManager: ObservableObject {
             let dir = AsrModels.defaultCacheDirectory(for: .v3)
             if AsrModels.modelsExist(at: dir, version: .v3) {
                 state = .downloaded
+                refreshModelSizeOnDisk()
             } else {
                 state = .notDownloaded
+                modelSizeOnDiskCached = ""
             }
         case .qwen:
             let dir = Qwen3AsrModels.defaultCacheDirectory()
             if Qwen3AsrModels.modelsExist(at: dir) {
                 state = .downloaded
+                refreshModelSizeOnDisk()
             } else {
                 state = .notDownloaded
+                modelSizeOnDiskCached = ""
             }
         }
     }
@@ -124,10 +131,12 @@ class FluidAudioModelManager: ObservableObject {
             case .parakeet:
                 try await AsrModels.download(version: .v3)
                 state = .downloaded
+                refreshModelSizeOnDisk()
 
             case .qwen:
                 try await Qwen3AsrModels.download()
                 state = .downloaded
+                refreshModelSizeOnDisk()
             }
         } catch {
             state = .error("Download failed: \(error.localizedDescription)")
@@ -159,6 +168,7 @@ class FluidAudioModelManager: ObservableObject {
         }
 
         state = .ready
+        refreshModelSizeOnDisk()
     }
 
     /// Transcribes audio from a file URL.
@@ -190,17 +200,29 @@ class FluidAudioModelManager: ObservableObject {
         let dir = modelDirectory
         try? FileManager.default.removeItem(at: dir)
         state = .notDownloaded
+        modelSizeOnDiskCached = ""
     }
 
-    /// Size of the model on disk.
-    var modelSizeOnDisk: String {
-        guard let size = try? FileManager.default.allocatedSizeOfDirectory(at: modelDirectory), size > 0 else {
-            return ""
+    /// Size of the model on disk (cached, not computed on every view redraw).
+    var modelSizeOnDisk: String { modelSizeOnDiskCached }
+
+    /// Recalculates model size on disk and updates the cached value. (Fix #12)
+    func refreshModelSizeOnDisk() {
+        let dir = modelDirectory
+        Task.detached(priority: .utility) {
+            let sizeString: String
+            if let size = try? FileManager.default.allocatedSizeOfDirectory(at: dir), size > 0 {
+                let formatter = ByteCountFormatter()
+                formatter.allowedUnits = [.useMB, .useGB]
+                formatter.countStyle = .file
+                sizeString = formatter.string(fromByteCount: Int64(size))
+            } else {
+                sizeString = ""
+            }
+            await MainActor.run { [sizeString] in
+                self.modelSizeOnDiskCached = sizeString
+            }
         }
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(size))
     }
 
     /// Whether a loaded runtime instance is available.
@@ -247,8 +269,15 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
     private let modelManager: FluidAudioModelManager
 
     private let audioEngine = AVAudioEngine()
-    private var audioBuffer: [Float] = []
-    private var inputSampleRate: Double = 16000
+
+    /// Thread-safe audio buffer protected by a serial queue.
+    private let bufferQueue = DispatchQueue(label: "com.kaze.fluidaudio.audioBuffer")
+    private var _audioBuffer: [Float] = []
+    private var _inputSampleRate: Double = 16000
+
+    /// Maximum recording duration in seconds.
+    private static let maxRecordingSeconds: Double = 300 // 5 minutes
+    private static let initialBufferCapacity: Int = 48000 * 60
 
     init(model: FluidAudioModel, modelManager: FluidAudioModelManager) {
         self.model = model
@@ -263,22 +292,36 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
     func startRecording() {
         guard !isRecording else { return }
 
-        audioBuffer = []
+        // Reset buffer with pre-allocation
+        bufferQueue.sync {
+            _audioBuffer = []
+            _audioBuffer.reserveCapacity(Self.initialBufferCapacity)
+        }
         transcribedText = ""
         audioLevel = 0
 
         do {
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
-            inputSampleRate = recordingFormat.sampleRate
+            let sampleRate = recordingFormat.sampleRate
+            let maxSamples = Int(sampleRate * Self.maxRecordingSeconds)
+
+            // Capture sample rate before recording starts
+            bufferQueue.sync { _inputSampleRate = sampleRate }
 
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 guard let self else { return }
 
                 if let channelData = buffer.floatChannelData?[0] {
                     let frameLength = Int(buffer.frameLength)
-                    let samples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
-                    self.audioBuffer.append(contentsOf: samples)
+
+                    // Fix #1: Thread-safe buffer access
+                    self.bufferQueue.sync {
+                        guard self._audioBuffer.count < maxSamples else { return }
+                        let remaining = maxSamples - self._audioBuffer.count
+                        let samplesToAppend = min(frameLength, remaining)
+                        self._audioBuffer.append(contentsOf: UnsafeBufferPointer(start: channelData, count: samplesToAppend))
+                    }
 
                     // Compute audio level for waveform visualization
                     if frameLength > 0 {
@@ -312,9 +355,13 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
         audioEngine.inputNode.removeTap(onBus: 0)
         isRecording = false
 
-        let capturedAudio = audioBuffer
-        let sampleRate = inputSampleRate
-        audioBuffer = []
+        // Fix #1: Thread-safe buffer extraction
+        let (capturedAudio, sampleRate) = bufferQueue.sync {
+            let audio = _audioBuffer
+            let rate = _inputSampleRate
+            _audioBuffer = []
+            return (audio, rate)
+        }
 
         guard !capturedAudio.isEmpty else {
             onTranscriptionFinished?("")
@@ -331,7 +378,7 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
             // Ensure model is loaded
             try await modelManager.loadModel()
 
-            // Write audio to a temporary WAV file (FluidAudio needs a file URL)
+            // Write audio to a temporary WAV file (FluidAudio/Parakeet needs a file URL)
             let tempURL = try writeWAVFile(samples: samples, sampleRate: sampleRate)
             defer { try? FileManager.default.removeItem(at: tempURL) }
 
@@ -346,6 +393,7 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
     }
 
     /// Writes raw float samples to a temporary WAV file.
+    /// Uses memcpy instead of element-by-element copy (Fix #4).
     private func writeWAVFile(samples: [Float], sampleRate: Double) throws -> URL {
         let tempDir = FileManager.default.temporaryDirectory
         let tempURL = tempDir.appendingPathComponent("kaze_recording_\(UUID().uuidString).wav")
@@ -363,9 +411,10 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
         }
 
         buffer.frameLength = frameCount
+        // Fix #4: Use memcpy instead of element-by-element loop
         let channelData = buffer.floatChannelData![0]
-        for i in 0..<samples.count {
-            channelData[i] = samples[i]
+        samples.withUnsafeBufferPointer { src in
+            channelData.update(from: src.baseAddress!, count: samples.count)
         }
 
         let file = try AVAudioFile(forWriting: tempURL, settings: format.settings)

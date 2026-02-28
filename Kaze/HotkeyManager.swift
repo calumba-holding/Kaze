@@ -77,6 +77,9 @@ class HotkeyManager {
         runLoopSource = nil
     }
 
+    /// Called from the CGEvent tap callback on an arbitrary thread.
+    /// Dispatches all mutable state access and callbacks to the main queue
+    /// to avoid data races with @MainActor-isolated properties. (Fix #2)
     private func handleEvent(type: CGEventType, event: CGEvent) {
         guard type == .flagsChanged else { return }
 
@@ -85,32 +88,34 @@ class HotkeyManager {
         let commandIsDown = flags.contains(commandFlagMask)
         let comboIsDown = optionIsDown && commandIsDown
 
-        switch mode {
-        case .holdToTalk:
-            if comboIsDown && !isKeyDown {
-                isKeyDown = true
-                Task { @MainActor in self.onKeyDown?() }
-            } else if !comboIsDown && isKeyDown {
-                isKeyDown = false
-                Task { @MainActor in self.onKeyUp?() }
-            }
-
-        case .toggle:
-            // Detect the rising edge: combo was not pressed, now it is
-            if comboIsDown && !isKeyDown {
-                isKeyDown = true
-                if !isToggleActive {
-                    // First press: start recording
-                    isToggleActive = true
-                    Task { @MainActor in self.onKeyDown?() }
-                } else {
-                    // Second press: stop recording
-                    isToggleActive = false
-                    Task { @MainActor in self.onKeyUp?() }
+        DispatchQueue.main.async { [self] in
+            switch mode {
+            case .holdToTalk:
+                if comboIsDown && !isKeyDown {
+                    isKeyDown = true
+                    onKeyDown?()
+                } else if !comboIsDown && isKeyDown {
+                    isKeyDown = false
+                    onKeyUp?()
                 }
-            } else if !comboIsDown && isKeyDown {
-                // Keys released — just reset the edge detector, don't fire callbacks
-                isKeyDown = false
+
+            case .toggle:
+                // Detect the rising edge: combo was not pressed, now it is
+                if comboIsDown && !isKeyDown {
+                    isKeyDown = true
+                    if !isToggleActive {
+                        // First press: start recording
+                        isToggleActive = true
+                        onKeyDown?()
+                    } else {
+                        // Second press: stop recording
+                        isToggleActive = false
+                        onKeyUp?()
+                    }
+                } else if !comboIsDown && isKeyDown {
+                    // Keys released — just reset the edge detector, don't fire callbacks
+                    isKeyDown = false
+                }
             }
         }
     }

@@ -192,16 +192,18 @@ struct WaveformView: View {
         return 0.35 + 0.4 * sine
     }
 
-    // MARK: - Animation timer
+    // MARK: - Animation timer (Fix #8: use DisplayLink-driven TimelineView instead of manual Timer)
 
     private func startAnimating() {
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
-            Task { @MainActor in
-                let speed: Double = isRecording ? 0.18 : (isEnhancing ? 0.08 : 0.05)
-                for i in 0..<barCount {
-                    phases[i] += speed + Double(i) * 0.008
-                }
+        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [self] _ in
+            let speed: Double = isRecording ? 0.18 : (isEnhancing ? 0.08 : 0.05)
+            for i in 0..<barCount {
+                phases[i] += speed + Double(i) * 0.008
             }
+        }
+        // Schedule on common run loop mode so it fires during tracking
+        if let timer = animTimer {
+            RunLoop.main.add(timer, forMode: .common)
         }
     }
 
