@@ -76,6 +76,7 @@ enum AppPreferenceKey {
     static let enhancementMode = "enhancementMode"
     static let enhancementSystemPrompt = "enhancementSystemPrompt"
     static let hotkeyMode = "hotkeyMode"
+    static let hotkeyShortcut = "hotkeyShortcut"
     static let whisperModelVariant = "whisperModelVariant"
     static let fluidAudioModelState = "fluidAudioModelState"
 
@@ -277,6 +278,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupHotkey() {
         hotkeyManager.mode = hotkeyMode
+        hotkeyManager.shortcut = HotkeyShortcut.loadFromDefaults()
         hotkeyManager.onKeyDown = { [weak self] in
             self?.beginRecording()
         }
@@ -298,8 +300,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let newMode = self.hotkeyMode
-                guard self.hotkeyManager.mode != newMode else { return }
-                self.hotkeyManager.mode = newMode
+                if self.hotkeyManager.mode != newMode {
+                    self.hotkeyManager.mode = newMode
+                }
+
+                let newShortcut = HotkeyShortcut.loadFromDefaults()
+                if self.hotkeyManager.shortcut != newShortcut {
+                    self.hotkeyManager.shortcut = newShortcut
+                }
             }
         }
     }
@@ -525,7 +533,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func showAccessibilityPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = "Kaze needs Accessibility access to detect the ⌥⌘ hotkey system-wide. Please enable Kaze in System Settings → Privacy & Security → Accessibility, then relaunch the app."
+        alert.informativeText = "Kaze needs Accessibility access to detect your global hotkey. Please enable Kaze in System Settings → Privacy & Security → Accessibility, then relaunch the app."
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Quit")
         if alert.runModal() == .alertFirstButtonReturn {

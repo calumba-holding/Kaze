@@ -2,7 +2,7 @@ import Foundation
 import Carbon
 import AppKit
 
-/// Monitors the global Option+Command (⌥⌘) hotkey via a CGEvent tap.
+/// Monitors a configurable global hotkey via a CGEvent tap.
 /// Supports two modes:
 /// - **Hold to Talk**: Press and hold both keys → `onKeyDown`; release either → `onKeyUp`
 /// - **Toggle**: First press of combo → `onKeyDown`; second press → `onKeyUp`
@@ -13,6 +13,7 @@ class HotkeyManager {
 
     /// The current hotkey mode. Can be changed at runtime.
     var mode: HotkeyMode = .holdToTalk
+    var shortcut: HotkeyShortcut = .default
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -20,10 +21,6 @@ class HotkeyManager {
 
     /// Tracks whether a toggle session is active (only used in toggle mode).
     private var isToggleActive = false
-
-    // We track flags-changed events and require both Option and Command.
-    private let optionFlagMask: CGEventFlags = .maskAlternate
-    private let commandFlagMask: CGEventFlags = .maskCommand
 
     /// `true` if the event tap was successfully created (i.e. Accessibility permission is granted).
     private(set) var isAccessibilityGranted = false
@@ -38,7 +35,9 @@ class HotkeyManager {
     @discardableResult
     func start() -> Bool {
         let eventMask: CGEventMask =
-            (1 << CGEventType.flagsChanged.rawValue)
+            (1 << CGEventType.flagsChanged.rawValue) |
+            (1 << CGEventType.keyDown.rawValue) |
+            (1 << CGEventType.keyUp.rawValue)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -81,42 +80,99 @@ class HotkeyManager {
     /// Dispatches all mutable state access and callbacks to the main queue
     /// to avoid data races with @MainActor-isolated properties. (Fix #2)
     private func handleEvent(type: CGEventType, event: CGEvent) {
-        guard type == .flagsChanged else { return }
-
-        let flags = event.flags
-        let optionIsDown = flags.contains(optionFlagMask)
-        let commandIsDown = flags.contains(commandFlagMask)
-        let comboIsDown = optionIsDown && commandIsDown
-
         DispatchQueue.main.async { [self] in
-            switch mode {
-            case .holdToTalk:
-                if comboIsDown && !isKeyDown {
-                    isKeyDown = true
+            let currentShortcut = shortcut
+            guard currentShortcut.isValid else { return }
+
+            if let keyCode = currentShortcut.keyCode {
+                handleKeyBasedShortcut(type: type, event: event, keyCode: keyCode, shortcut: currentShortcut)
+            } else {
+                handleModifierOnlyShortcut(type: type, event: event, shortcut: currentShortcut)
+            }
+        }
+    }
+
+    private func handleModifierOnlyShortcut(type: CGEventType, event: CGEvent, shortcut: HotkeyShortcut) {
+        guard type == .flagsChanged else { return }
+        let comboIsDown = shortcut.matchesExactModifiers(event.flags)
+
+        switch mode {
+        case .holdToTalk:
+            if comboIsDown && !isKeyDown {
+                isKeyDown = true
+                onKeyDown?()
+            } else if !comboIsDown && isKeyDown {
+                isKeyDown = false
+                onKeyUp?()
+            }
+
+        case .toggle:
+            // Detect the rising edge: combo was not pressed, now it is
+            if comboIsDown && !isKeyDown {
+                isKeyDown = true
+                if !isToggleActive {
+                    // First press: start recording
+                    isToggleActive = true
                     onKeyDown?()
-                } else if !comboIsDown && isKeyDown {
-                    isKeyDown = false
+                } else {
+                    // Second press: stop recording
+                    isToggleActive = false
                     onKeyUp?()
                 }
+            } else if !comboIsDown && isKeyDown {
+                // Keys released — just reset the edge detector, don't fire callbacks
+                isKeyDown = false
+            }
+        }
+    }
 
+    private func handleKeyBasedShortcut(type: CGEventType, event: CGEvent, keyCode: Int, shortcut: HotkeyShortcut) {
+        let eventKeyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        switch type {
+        case .keyDown:
+            // Ignore key repeat so hold mode doesn't retrigger.
+            let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) == 1
+            guard !isAutoRepeat else { return }
+            guard eventKeyCode == keyCode else { return }
+            guard shortcut.matchesExactModifiers(event.flags) else { return }
+
+            switch mode {
+            case .holdToTalk:
+                guard !isKeyDown else { return }
+                isKeyDown = true
+                onKeyDown?()
             case .toggle:
-                // Detect the rising edge: combo was not pressed, now it is
-                if comboIsDown && !isKeyDown {
-                    isKeyDown = true
-                    if !isToggleActive {
-                        // First press: start recording
-                        isToggleActive = true
-                        onKeyDown?()
-                    } else {
-                        // Second press: stop recording
-                        isToggleActive = false
-                        onKeyUp?()
-                    }
-                } else if !comboIsDown && isKeyDown {
-                    // Keys released — just reset the edge detector, don't fire callbacks
-                    isKeyDown = false
+                guard !isKeyDown else { return }
+                isKeyDown = true
+                if !isToggleActive {
+                    isToggleActive = true
+                    onKeyDown?()
+                } else {
+                    isToggleActive = false
+                    onKeyUp?()
                 }
             }
+
+        case .keyUp:
+            guard eventKeyCode == keyCode else { return }
+            if mode == .holdToTalk && isKeyDown {
+                isKeyDown = false
+                onKeyUp?()
+            } else if mode == .toggle {
+                isKeyDown = false
+            }
+
+        case .flagsChanged:
+            // If modifier state changes while the key is held in hold mode,
+            // stop as soon as the configured modifiers are no longer held.
+            guard mode == .holdToTalk, isKeyDown else { return }
+            if !shortcut.matchesExactModifiers(event.flags) {
+                isKeyDown = false
+                onKeyUp?()
+            }
+
+        default:
+            return
         }
     }
 }

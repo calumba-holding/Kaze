@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Settings Tab Enum
 
@@ -100,6 +101,10 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppPreferenceKey.enhancementMode) private var enhancementModeRaw = EnhancementMode.off.rawValue
     @AppStorage(AppPreferenceKey.enhancementSystemPrompt) private var systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
     @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
+    @State private var hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
+    @State private var isRecordingHotkey = false
+    @State private var hotkeyMonitor: Any?
+    @State private var recordedModifiersUnion: HotkeyShortcut.Modifiers = []
 
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
@@ -182,9 +187,26 @@ private struct GeneralSettingsView: View {
                 }
 
                 formRow("Shortcut:") {
-                    HStack(spacing: 3) {
-                        KeyCapView("⌥")
-                        KeyCapView("⌘")
+                    HStack(spacing: 8) {
+                        HStack(spacing: 3) {
+                            ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
+                                KeyCapView(token)
+                            }
+                        }
+                        Button(isRecordingHotkey ? "Press keys..." : "Record") {
+                            if isRecordingHotkey {
+                                stopHotkeyRecording()
+                            } else {
+                                startHotkeyRecording()
+                            }
+                        }
+                        .controlSize(.small)
+                        Button("Reset") {
+                            hotkeyShortcut = .default
+                            hotkeyShortcut.saveToDefaults()
+                            stopHotkeyRecording()
+                        }
+                        .controlSize(.small)
                     }
                 }
 
@@ -192,6 +214,14 @@ private struct GeneralSettingsView: View {
                     Text(selectedHotkeyMode.description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if isRecordingHotkey {
+                    formRow("") {
+                        Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 sectionDivider()
@@ -249,6 +279,12 @@ private struct GeneralSettingsView: View {
                 Spacer(minLength: 20)
             }
             .padding(.top, 12)
+        }
+        .onDisappear {
+            stopHotkeyRecording()
+        }
+        .onAppear {
+            hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
         }
     }
 
@@ -471,6 +507,63 @@ private struct GeneralSettingsView: View {
                 }
                 .controlSize(.small)
             }
+        }
+    }
+
+    private func startHotkeyRecording() {
+        stopHotkeyRecording()
+        isRecordingHotkey = true
+        recordedModifiersUnion = []
+
+        hotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            if !isRecordingHotkey {
+                return event
+            }
+
+            if event.type == .flagsChanged {
+                let modifiers = HotkeyShortcut.Modifiers(from: event.modifierFlags)
+
+                if !modifiers.isEmpty {
+                    recordedModifiersUnion.formUnion(modifiers)
+                    return nil
+                }
+
+                // User released held modifiers without pressing a regular key:
+                // treat this as a modifier-only shortcut recording.
+                if !recordedModifiersUnion.isEmpty {
+                    hotkeyShortcut = HotkeyShortcut(modifiers: recordedModifiersUnion, keyCode: nil)
+                    hotkeyShortcut.saveToDefaults()
+                    stopHotkeyRecording()
+                    return nil
+                }
+
+                return nil
+            }
+
+            if event.keyCode == 53 {
+                stopHotkeyRecording()
+                return nil
+            }
+
+            let modifiers = HotkeyShortcut.Modifiers(from: event.modifierFlags)
+            guard !modifiers.isEmpty else {
+                NSSound.beep()
+                return nil
+            }
+
+            hotkeyShortcut = HotkeyShortcut(modifiers: modifiers, keyCode: Int(event.keyCode))
+            hotkeyShortcut.saveToDefaults()
+            stopHotkeyRecording()
+            return nil
+        }
+    }
+
+    private func stopHotkeyRecording() {
+        isRecordingHotkey = false
+        recordedModifiersUnion = []
+        if let hotkeyMonitor {
+            NSEvent.removeMonitor(hotkeyMonitor)
+            self.hotkeyMonitor = nil
         }
     }
 }
