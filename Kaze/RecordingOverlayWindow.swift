@@ -9,6 +9,7 @@ class OverlayState: ObservableObject {
     @Published var audioLevel: Float = 0.0
     @Published var transcribedText = ""
     @Published var isEnhancing = false
+    @Published var isVisible = false
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -48,6 +49,7 @@ class OverlayState: ObservableObject {
         audioLevel = 0
         transcribedText = ""
         isEnhancing = false
+        isVisible = false
         cancellables.removeAll()
     }
 }
@@ -117,16 +119,41 @@ class RecordingOverlayWindow: NSPanel {
 
         alphaValue = 1
         orderFront(nil)
+
+        // Trigger the expand animation on next runloop tick so SwiftUI picks it up
+        if notchMode {
+            DispatchQueue.main.async {
+                state.isVisible = true
+            }
+        }
     }
 
-    func hide(completion: (() -> Void)? = nil) {
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.3
-            animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.orderOut(nil)
-            completion?()
-        })
+    func hide(state: OverlayState? = nil, completion: (() -> Void)? = nil) {
+        if isNotchMode, let state {
+            // Step 1: Clear text and collapse to compact shape
+            state.transcribedText = ""
+            state.isEnhancing = false
+            state.isRecording = false
+
+            // Step 2: After compact transition settles, shrink width to zero
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                state.isVisible = false
+            }
+
+            // Step 3: Remove window after shrink animation completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
+                self?.orderOut(nil)
+                completion?()
+            }
+        } else {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.3
+                animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                self?.orderOut(nil)
+                completion?()
+            })
+        }
     }
 }
 
@@ -142,7 +169,8 @@ private struct OverlayContent: View {
             isRecording: state.isRecording,
             transcribedText: state.transcribedText,
             isEnhancing: state.isEnhancing,
-            notchMode: notchMode
+            notchMode: notchMode,
+            notchVisible: state.isVisible
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, notchMode ? 0 : 8)

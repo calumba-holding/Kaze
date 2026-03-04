@@ -415,7 +415,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let waitingForAI = enhancementMode == .appleIntelligence && enhancer != nil
             if !waitingForAI {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    self?.overlayWindow.hide()
+                    self?.overlayWindow.hide(state: self?.overlayState)
                     self?.isSessionActive = false
                 }
             }
@@ -427,7 +427,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         overlayState.isEnhancing = false
 
         guard !rawText.isEmpty else {
-            overlayWindow.hide()
+            overlayWindow.hide(state: overlayState)
             isSessionActive = false
             return
         }
@@ -441,7 +441,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 defer {
                     self.overlayState.isEnhancing = false
                     self.setEnhancingState(false)
-                    self.overlayWindow.hide()
+                    self.overlayWindow.hide(state: self.overlayState)
                     self.isSessionActive = false
                 }
                 do {
@@ -477,7 +477,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             historyManager.addRecord(
                 TranscriptionRecord(text: rawText, engine: engine, wasEnhanced: false)
             )
-            overlayWindow.hide()
+            overlayWindow.hide(state: overlayState)
             isSessionActive = false
         }
     }

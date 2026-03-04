@@ -6,6 +6,7 @@ struct WaveformView: View {
     var transcribedText: String
     var isEnhancing: Bool = false
     var notchMode: Bool = false
+    var notchVisible: Bool = false
 
     // Number of bars in the waveform
     private let barCount = 16
@@ -24,9 +25,9 @@ struct WaveformView: View {
     private var cornerRadius: CGFloat { isCompact ? 24 : 20 }
     private var textOverflows: Bool { transcribedText.count > 38 }
 
-    // Notch mode corner radii (same as teleprompter)
-    private var notchTopCornerRadius: CGFloat { isCompact ? 6 : 14 }
-    private var notchBottomCornerRadius: CGFloat { isCompact ? 10 : 20 }
+    // Notch mode corner radii — fixed so width never shifts
+    private let notchTopCornerRadius: CGFloat = 8
+    private let notchBottomCornerRadius: CGFloat = 10
 
     var body: some View {
         Group {
@@ -95,7 +96,7 @@ struct WaveformView: View {
 
     private var notchBody: some View {
         VStack(spacing: 0) {
-            // Main row: icon on left, spacer, waveform/timer on right
+            // Main row: ione on left, spacer, waveform/timer on right
             HStack(spacing: 0) {
                 // Left side: icon
                 Group {
@@ -124,11 +125,12 @@ struct WaveformView: View {
             .animation(.easeInOut(duration: 0.25), value: isEnhancing)
             .frame(height: 32)
 
-            // Expanded: show transcription text below
+            // Live text below the notch bar (only Direct Dictation provides this)
             if hasText {
-                transcriptionTextRow(maxWidth: 320)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
+                transcriptionTextRow(maxWidth: notchContentWidth - 56)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 6)
+                    .padding(.bottom, 12)
             }
         }
         .frame(width: notchContentWidth)
@@ -136,17 +138,19 @@ struct WaveformView: View {
             NotchShape(topCornerRadius: notchTopCornerRadius, bottomCornerRadius: notchBottomCornerRadius)
                 .fill(.black)
         )
-        .animation(.spring(response: 0.4, dampingFraction: 0.7, blendDuration: 0.1), value: isCompact)
-        .animation(.spring(response: 0.4, dampingFraction: 0.7, blendDuration: 0.1), value: hasText)
+        .clipShape(
+            NotchShape(topCornerRadius: notchTopCornerRadius, bottomCornerRadius: notchBottomCornerRadius)
+        )
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: notchVisible)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: isCompact)
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: hasText)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .scaleEffect(x: appeared ? 1.0 : 0.0, y: 1.0, anchor: .top)
-        .clipped()
-        .animation(.spring(response: 0.35, dampingFraction: 0.7, blendDuration: 0.1), value: appeared)
     }
 
-    /// Width of the notch content — wider when expanded with text.
+    /// Width of the notch content.
+    /// Fixed width — only height changes when text appears.
     private var notchContentWidth: CGFloat {
-        isCompact ? 280 : 360
+        notchVisible ? 280 : 0
     }
 
     // MARK: - Shared components
@@ -230,7 +234,7 @@ struct WaveformView: View {
     }
 
     private func notchBarHeight(for index: Int) -> CGFloat {
-        let level = CGFloat(audioLevel)
+        let level = min(CGFloat(audioLevel) * 1.6, 1.0) // boost sensitivity
         // Use a subset of phases so bars still animate independently
         let phaseIndex = index * 3 // spread across the 16 phases
         let phase = phases[min(phaseIndex, barCount - 1)]
@@ -239,7 +243,7 @@ struct WaveformView: View {
         let maxH: CGFloat = 18
 
         if isRecording {
-            let driven = minH + (maxH - minH) * level * CGFloat(sine * 0.7 + 0.3)
+            let driven = minH + (maxH - minH) * level * CGFloat(sine * 0.5 + 0.5)
             return max(minH, driven)
         } else {
             return minH + (maxH * 0.15) * CGFloat(sine)
