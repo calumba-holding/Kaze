@@ -135,232 +135,230 @@ private struct GeneralSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // MARK: Transcription
-                formRow("Transcription engine:") {
-                    Picker("Engine", selection: $engineRaw) {
-                        ForEach(TranscriptionEngine.allCases) { engine in
-                            Text(engine.title).tag(engine.rawValue)
+        VStack(spacing: 0) {
+            // MARK: Transcription
+            formRow("Transcription engine:") {
+                Picker("Engine", selection: $engineRaw) {
+                    ForEach(TranscriptionEngine.allCases) { engine in
+                        Text(engine.title).tag(engine.rawValue)
+                    }
+                }
+                .labelsHidden()
+            }
+
+            // Engine details card: description + model controls + status
+            formRow("") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedEngine.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if selectedEngine == .whisper {
+                        Picker("Model", selection: Binding(
+                            get: { whisperModelManager.selectedVariant },
+                            set: { whisperModelManager.selectedVariant = $0 }
+                        )) {
+                            ForEach(WhisperModelVariant.allCases) { variant in
+                                Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
+                            }
+                        }
+                        .labelsHidden()
+                        .disabled(isModelBusy)
+
+                        Text(whisperModelManager.selectedVariant.qualityDescription)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+
+                        whisperModelStatusRow
+                    }
+
+                    if selectedEngine == .parakeet {
+                        fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
+                    }
+
+                    if selectedEngine == .qwen {
+                        fluidAudioModelStatusRow(manager: qwenModelManager, model: .qwen)
+                    }
+                }
+            }
+
+            sectionDivider()
+
+            // MARK: Microphone
+            formRow("Microphone:") {
+                Picker("Microphone", selection: $selectedMicrophoneID) {
+                    Text("System Default").tag("")
+                    ForEach(availableMicrophones, id: \.id) { mic in
+                        Text(mic.name).tag(mic.id)
+                    }
+                }
+                .labelsHidden()
+            }
+
+            sectionDivider()
+
+            // MARK: Hotkey
+            formRow("Hotkey mode:") {
+                Picker("Mode", selection: $hotkeyModeRaw) {
+                    ForEach(HotkeyMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .labelsHidden()
+            }
+
+            formRow("Shortcut:") {
+                HStack(spacing: 8) {
+                    HStack(spacing: 3) {
+                        ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
+                            KeyCapView(token)
                         }
                     }
-                    .labelsHidden()
+                    Button(isRecordingHotkey ? "Press keys..." : "Record") {
+                        if isRecordingHotkey {
+                            stopHotkeyRecording()
+                        } else {
+                            startHotkeyRecording()
+                        }
+                    }
+                    .controlSize(.small)
+                    Button("Reset") {
+                        hotkeyShortcut = .default
+                        hotkeyShortcut.saveToDefaults()
+                        stopHotkeyRecording()
+                    }
+                    .controlSize(.small)
                 }
+            }
 
-                // Engine details card: description + model controls + status
+            formRow("") {
+                Text(selectedHotkeyMode.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if isRecordingHotkey {
                 formRow("") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(selectedEngine.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
-                        if selectedEngine == .whisper {
-                            Picker("Model", selection: Binding(
-                                get: { whisperModelManager.selectedVariant },
-                                set: { whisperModelManager.selectedVariant = $0 }
-                            )) {
-                                ForEach(WhisperModelVariant.allCases) { variant in
-                                    Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
-                                }
-                            }
-                            .labelsHidden()
-                            .disabled(isModelBusy)
+            sectionDivider()
 
-                            Text(whisperModelManager.selectedVariant.qualityDescription)
+            // MARK: Enhancement
+            formRow("Text enhancement:") {
+                Picker("Enhancement", selection: $enhancementModeRaw) {
+                    Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
+                    Text(EnhancementMode.appleIntelligence.title)
+                        .tag(EnhancementMode.appleIntelligence.rawValue)
+                }
+                .labelsHidden()
+                .disabled(selectedEngine != .dictation)
+            }
+
+            if selectedEngine != .dictation {
+                formRow("") {
+                    Label("Text enhancement is only available with Direct Dictation. AI models already produce enhanced output.", systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if !appleIntelligenceAvailable {
+                formRow("") {
+                    Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if enhancementModeRaw == EnhancementMode.appleIntelligence.rawValue, selectedEngine == .dictation {
+                formRow("System prompt:") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextEditor(text: $systemPrompt)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(height: 80)
+                            .scrollContentBackground(.hidden)
+                            .padding(6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(.quaternary.opacity(0.5))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(.quaternary, lineWidth: 1)
+                            )
+
+                        HStack {
+                            Text("Customise how Apple Intelligence enhances your transcriptions.")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
-
-                            whisperModelStatusRow
-                        }
-
-                        if selectedEngine == .parakeet {
-                            fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
-                        }
-
-                        if selectedEngine == .qwen {
-                            fluidAudioModelStatusRow(manager: qwenModelManager, model: .qwen)
-                        }
-                    }
-                }
-
-                sectionDivider()
-
-                // MARK: Microphone
-                formRow("Microphone:") {
-                    Picker("Microphone", selection: $selectedMicrophoneID) {
-                        Text("System Default").tag("")
-                        ForEach(availableMicrophones, id: \.id) { mic in
-                            Text(mic.name).tag(mic.id)
-                        }
-                    }
-                    .labelsHidden()
-                }
-
-                sectionDivider()
-
-                // MARK: Hotkey
-                formRow("Hotkey mode:") {
-                    Picker("Mode", selection: $hotkeyModeRaw) {
-                        ForEach(HotkeyMode.allCases) { mode in
-                            Text(mode.title).tag(mode.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                }
-
-                formRow("Shortcut:") {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 3) {
-                            ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
-                                KeyCapView(token)
+                            Spacer()
+                            Button("Reset to Default") {
+                                systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
                             }
-                        }
-                        Button(isRecordingHotkey ? "Press keys..." : "Record") {
-                            if isRecordingHotkey {
-                                stopHotkeyRecording()
-                            } else {
-                                startHotkeyRecording()
-                            }
-                        }
-                        .controlSize(.small)
-                        Button("Reset") {
-                            hotkeyShortcut = .default
-                            hotkeyShortcut.saveToDefaults()
-                            stopHotkeyRecording()
-                        }
-                        .controlSize(.small)
-                    }
-                }
-
-                formRow("") {
-                    Text(selectedHotkeyMode.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if isRecordingHotkey {
-                    formRow("") {
-                        Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                sectionDivider()
-
-                // MARK: Enhancement
-                formRow("Text enhancement:") {
-                    Picker("Enhancement", selection: $enhancementModeRaw) {
-                        Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
-                        Text(EnhancementMode.appleIntelligence.title)
-                            .tag(EnhancementMode.appleIntelligence.rawValue)
-                    }
-                    .labelsHidden()
-                    .disabled(selectedEngine != .dictation)
-                }
-
-                if selectedEngine != .dictation {
-                    formRow("") {
-                        Label("Text enhancement is only available with Direct Dictation. AI models already produce enhanced output.", systemImage: "info.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } else if !appleIntelligenceAvailable {
-                    formRow("") {
-                        Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if enhancementModeRaw == EnhancementMode.appleIntelligence.rawValue, selectedEngine == .dictation {
-                    formRow("System prompt:") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            TextEditor(text: $systemPrompt)
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(height: 80)
-                                .scrollContentBackground(.hidden)
-                                .padding(6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(.quaternary.opacity(0.5))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .strokeBorder(.quaternary, lineWidth: 1)
-                                )
-
-                            HStack {
-                                Text("Customise how Apple Intelligence enhances your transcriptions.")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                                Spacer()
-                                Button("Reset to Default") {
-                                    systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
-                                }
-                                .controlSize(.small)
-                                .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
-                            }
+                            .controlSize(.small)
+                            .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
                         }
                     }
                 }
-
-                sectionDivider()
-
-                // MARK: Appearance
-                formRow("Notch mode:") {
-                    Toggle(isOn: $notchMode) {
-                        Text("Dynamic Island style")
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                }
-
-                formRow("") {
-                    Text("Show the recording indicator at the top of the screen, like a Dynamic Island around the MacBook notch. When off, a floating pill appears at the bottom.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                sectionDivider()
-
-                // MARK: Output
-                formRow("Trailing space:") {
-                    Toggle(isOn: $appendTrailingSpace) {
-                        Text("Append a space after each transcription")
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                }
-
-                sectionDivider()
-
-                // MARK: System
-                formRow("Launch at login:") {
-                    Toggle(isOn: Binding(
-                        get: { SMAppService.mainApp.status == .enabled },
-                        set: { newValue in
-                            do {
-                                if newValue {
-                                    try SMAppService.mainApp.register()
-                                } else {
-                                    try SMAppService.mainApp.unregister()
-                                }
-                            } catch {
-                                print("Launch at login toggle failed: \(error)")
-                            }
-                        }
-                    )) {
-                        Text("Start Kaze when you log in")
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                }
-
-                Spacer(minLength: 20)
             }
-            .padding(.top, 12)
+
+            sectionDivider()
+
+            // MARK: Appearance
+            formRow("Notch mode:") {
+                Toggle(isOn: $notchMode) {
+                    Text("Dynamic Island style")
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            formRow("") {
+                Text("Show the recording indicator at the top of the screen, like a Dynamic Island around the MacBook notch. When off, a floating pill appears at the bottom.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            sectionDivider()
+
+            // MARK: Output
+            formRow("Trailing space:") {
+                Toggle(isOn: $appendTrailingSpace) {
+                    Text("Append a space after each transcription")
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            sectionDivider()
+
+            // MARK: System
+            formRow("Launch at login:") {
+                Toggle(isOn: Binding(
+                    get: { SMAppService.mainApp.status == .enabled },
+                    set: { newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                        } catch {
+                            print("Launch at login toggle failed: \(error)")
+                        }
+                    }
+                )) {
+                    Text("Start Kaze when you log in")
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            Spacer(minLength: 20)
         }
+        .padding(.top, 12)
         .onDisappear {
             stopHotkeyRecording()
             audioDeviceObserver.stop()

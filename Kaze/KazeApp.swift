@@ -386,13 +386,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(rootView: contentView)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 1800),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.minSize = NSSize(width: 500, height: 500)
-        window.maxSize = NSSize(width: 500, height: 1800)
+        window.minSize = NSSize(width: 500, height: 800)
+        window.maxSize = NSSize(width: 500, height: 800)
         window.center()
         window.title = "Kaze Settings"
         window.contentViewController = hostingController
