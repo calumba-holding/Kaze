@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Accelerate
 import Combine
 import FluidAudio
 
@@ -204,7 +205,7 @@ class FluidAudioModelManager: ObservableObject {
         }
     }
 
-    /// Transcribes audio from a file URL.
+    /// Transcribes audio from a file URL (used by Parakeet which requires a file).
     func transcribe(audioURL: URL) async throws -> String {
         switch model {
         case .parakeet:
@@ -215,6 +216,7 @@ class FluidAudioModelManager: ObservableObject {
             return normalizeTranscript(result.text)
 
         case .qwen:
+            // Prefer the in-memory path; file-based is kept as a fallback.
             guard let manager = qwen3Manager else {
                 throw FluidAudioTranscriberError.modelNotLoaded
             }
@@ -223,6 +225,39 @@ class FluidAudioModelManager: ObservableObject {
             let text = try await manager.transcribe(audioSamples: audioSamples)
             return normalizeTranscript(text)
         }
+    }
+
+    /// Transcribes Qwen audio directly from in-memory float samples, avoiding temp file I/O.
+    func transcribeInMemory(samples: [Float], sampleRate: Double) async throws -> String {
+        guard model == .qwen else {
+            throw FluidAudioTranscriberError.modelNotLoaded
+        }
+        guard let manager = qwen3Manager else {
+            throw FluidAudioTranscriberError.modelNotLoaded
+        }
+
+        // Qwen expects 16kHz mono. Resample in-memory if needed.
+        let targetRate: Double = 16000
+        let audioSamples: [Float]
+        if abs(sampleRate - targetRate) > 1.0 {
+            audioSamples = Self.resampleForQwen(samples, from: sampleRate, to: targetRate)
+        } else {
+            audioSamples = samples
+        }
+
+        let text = try await manager.transcribe(audioSamples: audioSamples)
+        return normalizeTranscript(text)
+    }
+
+    /// Resamples audio using linear interpolation via Accelerate.
+    private nonisolated static func resampleForQwen(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
+        let ratio = targetSampleRate / sourceSampleRate
+        let outputLength = Int(Double(samples.count) * ratio)
+        guard outputLength > 0 else { return [] }
+        var output = [Float](repeating: 0, count: outputLength)
+        var control = (0..<outputLength).map { Float(Double($0) / ratio) }
+        vDSP_vlint(samples, &control, 1, &output, 1, vDSP_Length(outputLength), vDSP_Length(samples.count))
+        return output
     }
 
     /// Deletes the downloaded model files.
@@ -418,11 +453,16 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
             try await modelManager.loadModel()
             guard !Task.isCancelled else { return }
 
-            // Write audio to a temporary WAV file (FluidAudio/Parakeet needs a file URL)
-            let tempURL = try writeWAVFile(samples: samples, sampleRate: sampleRate)
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-
-            let text = try await modelManager.transcribe(audioURL: tempURL)
+            let text: String
+            if model == .qwen {
+                // Qwen path: pass samples directly in-memory, avoiding temp file I/O.
+                text = try await modelManager.transcribeInMemory(samples: samples, sampleRate: sampleRate)
+            } else {
+                // Parakeet path: requires a file URL.
+                let tempURL = try writeWAVFile(samples: samples, sampleRate: sampleRate)
+                defer { try? FileManager.default.removeItem(at: tempURL) }
+                text = try await modelManager.transcribe(audioURL: tempURL)
+            }
             guard !Task.isCancelled else { return }
 
             transcribedText = text

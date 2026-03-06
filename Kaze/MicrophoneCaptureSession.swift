@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Accelerate
 import CoreMedia
 
 enum MicrophoneCaptureError: LocalizedError {
@@ -129,14 +130,18 @@ final class MicrophoneCaptureSession: NSObject, AVCaptureAudioDataOutputSampleBu
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         do {
-            let (monoSamples, sampleRate) = try Self.extractMonoSamples(from: sampleBuffer)
+            let (monoSamples, sampleRate) = try extractMonoSamples(from: sampleBuffer)
             onAudioChunk?(CapturedAudioChunk(sampleBuffer: sampleBuffer, monoSamples: monoSamples, sampleRate: sampleRate))
         } catch {
             return
         }
     }
 
-    private static func extractMonoSamples(from sampleBuffer: CMSampleBuffer) throws -> ([Float], Double) {
+    /// Scratch buffer reused across callbacks to avoid per-callback allocation.
+    /// Only accessed from the `sampleBufferQueue` serial queue, so no lock needed.
+    private var scratchBuffer: [Float] = []
+
+    private func extractMonoSamples(from sampleBuffer: CMSampleBuffer) throws -> ([Float], Double) {
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
             throw MicrophoneCaptureError.unsupportedAudioFormat
@@ -174,83 +179,93 @@ final class MicrophoneCaptureSession: NSObject, AVCaptureAudioDataOutputSampleBu
         let isSignedInteger = (asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
-        var monoSamples = [Float](repeating: 0, count: frameCount)
+        // Reuse scratch buffer to avoid per-callback allocation
+        if scratchBuffer.count < frameCount {
+            scratchBuffer = [Float](repeating: 0, count: frameCount)
+        }
+        let n = vDSP_Length(frameCount)
+
+        // Zero out the working region
+        var zero: Float = 0
+        vDSP_vfill(&zero, &scratchBuffer, 1, n)
+
         let bufferListPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
 
         if isFloat && asbd.mBitsPerChannel == 32 {
             if isNonInterleaved {
+                // Each channel is a separate buffer; sum with vDSP_vadd
                 for channel in 0..<min(channelCount, bufferListPointer.count) {
                     guard let data = bufferListPointer[channel].mData?.assumingMemoryBound(to: Float.self) else { continue }
-                    for frame in 0..<frameCount {
-                        monoSamples[frame] += data[frame]
-                    }
+                    vDSP_vadd(scratchBuffer, 1, data, 1, &scratchBuffer, 1, n)
                 }
             } else {
                 guard let data = bufferListPointer.first?.mData?.assumingMemoryBound(to: Float.self) else {
                     throw MicrophoneCaptureError.unsupportedAudioFormat
                 }
-                for frame in 0..<frameCount {
-                    let offset = frame * channelCount
-                    var sum: Float = 0
+                if channelCount == 1 {
+                    // Mono: direct copy
+                    memcpy(&scratchBuffer, data, frameCount * MemoryLayout<Float>.size)
+                } else {
+                    // Interleaved multi-channel: sum channels with strided adds
                     for channel in 0..<channelCount {
-                        sum += data[offset + channel]
+                        vDSP_vadd(scratchBuffer, 1, data.advanced(by: channel), vDSP_Stride(channelCount), &scratchBuffer, 1, n)
                     }
-                    monoSamples[frame] = sum
                 }
             }
         } else if isSignedInteger && asbd.mBitsPerChannel == 16 {
+            // Convert Int16 to Float using vDSP, then accumulate
+            var conversionBuffer = [Float](repeating: 0, count: frameCount)
             if isNonInterleaved {
                 for channel in 0..<min(channelCount, bufferListPointer.count) {
                     guard let data = bufferListPointer[channel].mData?.assumingMemoryBound(to: Int16.self) else { continue }
-                    for frame in 0..<frameCount {
-                        monoSamples[frame] += Float(data[frame]) / Float(Int16.max)
-                    }
+                    vDSP_vflt16(data, 1, &conversionBuffer, 1, n)
+                    vDSP_vadd(scratchBuffer, 1, conversionBuffer, 1, &scratchBuffer, 1, n)
                 }
             } else {
                 guard let data = bufferListPointer.first?.mData?.assumingMemoryBound(to: Int16.self) else {
                     throw MicrophoneCaptureError.unsupportedAudioFormat
                 }
-                for frame in 0..<frameCount {
-                    let offset = frame * channelCount
-                    var sum: Float = 0
-                    for channel in 0..<channelCount {
-                        sum += Float(data[offset + channel]) / Float(Int16.max)
-                    }
-                    monoSamples[frame] = sum
+                for channel in 0..<channelCount {
+                    vDSP_vflt16(data.advanced(by: channel), vDSP_Stride(channelCount), &conversionBuffer, 1, n)
+                    vDSP_vadd(scratchBuffer, 1, conversionBuffer, 1, &scratchBuffer, 1, n)
                 }
             }
+            // Scale by 1/Int16.max
+            var scale = Float(1.0) / Float(Int16.max)
+            vDSP_vsmul(scratchBuffer, 1, &scale, &scratchBuffer, 1, n)
         } else if isSignedInteger && asbd.mBitsPerChannel == 32 {
+            // Convert Int32 to Float using vDSP, then accumulate
+            var conversionBuffer = [Float](repeating: 0, count: frameCount)
             if isNonInterleaved {
                 for channel in 0..<min(channelCount, bufferListPointer.count) {
                     guard let data = bufferListPointer[channel].mData?.assumingMemoryBound(to: Int32.self) else { continue }
-                    for frame in 0..<frameCount {
-                        monoSamples[frame] += Float(data[frame]) / Float(Int32.max)
-                    }
+                    vDSP_vflt32(data, 1, &conversionBuffer, 1, n)
+                    vDSP_vadd(scratchBuffer, 1, conversionBuffer, 1, &scratchBuffer, 1, n)
                 }
             } else {
                 guard let data = bufferListPointer.first?.mData?.assumingMemoryBound(to: Int32.self) else {
                     throw MicrophoneCaptureError.unsupportedAudioFormat
                 }
-                for frame in 0..<frameCount {
-                    let offset = frame * channelCount
-                    var sum: Float = 0
-                    for channel in 0..<channelCount {
-                        sum += Float(data[offset + channel]) / Float(Int32.max)
-                    }
-                    monoSamples[frame] = sum
+                for channel in 0..<channelCount {
+                    vDSP_vflt32(data.advanced(by: channel), vDSP_Stride(channelCount), &conversionBuffer, 1, n)
+                    vDSP_vadd(scratchBuffer, 1, conversionBuffer, 1, &scratchBuffer, 1, n)
                 }
             }
+            // Scale by 1/Int32.max
+            var scale = Float(1.0) / Float(Int32.max)
+            vDSP_vsmul(scratchBuffer, 1, &scale, &scratchBuffer, 1, n)
         } else {
             throw MicrophoneCaptureError.unsupportedAudioFormat
         }
 
+        // Average across channels
         if channelCount > 1 {
-            let divisor = Float(channelCount)
-            for frame in 0..<frameCount {
-                monoSamples[frame] /= divisor
-            }
+            var divisor = Float(channelCount)
+            vDSP_vsdiv(scratchBuffer, 1, &divisor, &scratchBuffer, 1, n)
         }
 
+        // Return a copy of just the valid region
+        let monoSamples = Array(scratchBuffer.prefix(frameCount))
         return (monoSamples, asbd.mSampleRate)
     }
 }

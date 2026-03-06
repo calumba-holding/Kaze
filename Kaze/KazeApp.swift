@@ -182,6 +182,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var observedEngineForPreferenceChanges: TranscriptionEngine?
     private static let modelUnloadIdleDelay: Duration = .seconds(90)
 
+    /// Captures all settings at the moment recording begins so that mid-session
+    /// preference changes cannot route stop/finalize through the wrong engine.
+    private struct RecordingSession {
+        let engine: TranscriptionEngine
+        let enhancementMode: EnhancementMode
+        let transcriber: any TranscriberProtocol
+    }
+
+    /// The active recording session, non-nil while `isSessionActive` is true.
+    private var activeSession: RecordingSession?
+
     /// Returns the currently active transcriber based on the user's engine preference.
     private var activeTranscriber: (any TranscriberProtocol)? {
         switch transcriptionEngine {
@@ -452,7 +463,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         idleModelUnloadTask?.cancel()
         idleModelUnloadTask = nil
 
+        // Capture engine and enhancement mode at session start so that mid-session
+        // preference changes cannot route stop/finalize through the wrong engine.
         let engine = transcriptionEngine
+        let enhancement = enhancementMode
 
         // Check if the selected engine's model is available
         if engine.requiresModelDownload && !isEngineReady(engine) {
@@ -476,6 +490,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
+            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: whisper)
             overlayState.bind(to: whisper)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             whisper.startRecording()
@@ -488,6 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
+            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: transcriber)
             overlayState.bind(to: transcriber)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             transcriber.startRecording()
@@ -498,6 +514,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
+            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: speechTranscriber)
             overlayState.bind(to: speechTranscriber)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             speechTranscriber.startRecording()
@@ -534,26 +551,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func endRecording() {
-        guard isSessionActive else { return }
+        guard isSessionActive, let session = activeSession else { return }
 
-        let engine = transcriptionEngine
+        let engine = session.engine
 
-        if engine == .whisper, isEngineReady(.whisper) {
-            whisperTranscriber?.stopRecording()
+        if engine == .whisper {
+            (session.transcriber as? WhisperTranscriber)?.stopRecording()
             // For Whisper, transcription happens after stop — the overlay stays visible
             // until onTranscriptionFinished fires via processTranscription
             overlayState.isEnhancing = true // Show processing state while Whisper works
-        } else if (engine == .parakeet || engine == .qwen), isEngineReady(engine) {
-            fluidAudioTranscriber?.stopRecording()
+        } else if engine == .parakeet || engine == .qwen {
+            (session.transcriber as? FluidAudioTranscriber)?.stopRecording()
             // FluidAudio models also transcribe after stop
             overlayState.isEnhancing = true
         } else {
-            speechTranscriber.stopRecording()
-            let waitingForAI = enhancementMode == .appleIntelligence && enhancer != nil
+            (session.transcriber as? SpeechTranscriber)?.stopRecording()
+            let waitingForAI = session.enhancementMode == .appleIntelligence && enhancer != nil
             if !waitingForAI {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                     self?.overlayWindow.hide(state: self?.overlayState)
                     self?.isSessionActive = false
+                    self?.activeSession = nil
                     self?.updateStatusItemIndicator()
                     self?.scheduleIdleModelUnload()
                 }
@@ -562,29 +580,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func processTranscription(_ rawText: String) {
+        // Use the session that was active when recording started, not current prefs.
+        let session = activeSession
+
         // Clear the "processing" state from Whisper
         overlayState.isEnhancing = false
 
         guard !rawText.isEmpty else {
             overlayWindow.hide(state: overlayState)
             isSessionActive = false
+            activeSession = nil
             updateStatusItemIndicator()
             scheduleIdleModelUnload()
             return
         }
 
-        let engine = transcriptionEngine
+        let engine = session?.engine ?? transcriptionEngine
+        let enhancement = session?.enhancementMode ?? enhancementMode
 
         // Only apply AI enhancement for Direct Dictation — AI models already produce enhanced output.
-        if enhancementMode == .appleIntelligence, engine == .dictation, let enhancer {
+        if enhancement == .appleIntelligence, engine == .dictation, let enhancer {
             overlayState.isEnhancing = true
-            setEnhancingState(true)
+            setEnhancingState(true, session: session)
             Task {
                 defer {
                     self.overlayState.isEnhancing = false
-                    self.setEnhancingState(false)
+                    self.setEnhancingState(false, session: session)
                     self.overlayWindow.hide(state: self.overlayState)
                     self.isSessionActive = false
+                    self.activeSession = nil
                     self.updateStatusItemIndicator()
                     self.scheduleIdleModelUnload()
                 }
@@ -623,6 +647,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
             overlayWindow.hide(state: overlayState)
             isSessionActive = false
+            activeSession = nil
             updateStatusItemIndicator()
             scheduleIdleModelUnload()
         }
@@ -664,14 +689,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatusItemIndicator()
     }
 
-    private func setEnhancingState(_ enhancing: Bool) {
-        switch transcriptionEngine {
-        case .whisper:
-            whisperTranscriber?.isEnhancing = enhancing
-        case .parakeet, .qwen:
-            fluidAudioTranscriber?.isEnhancing = enhancing
-        case .dictation:
-            speechTranscriber.isEnhancing = enhancing
+    private func setEnhancingState(_ enhancing: Bool, session: RecordingSession? = nil) {
+        if let session {
+            session.transcriber.isEnhancing = enhancing
+        } else {
+            // Fallback to current preference (should not happen with proper session usage)
+            switch transcriptionEngine {
+            case .whisper:
+                whisperTranscriber?.isEnhancing = enhancing
+            case .parakeet, .qwen:
+                fluidAudioTranscriber?.isEnhancing = enhancing
+            case .dictation:
+                speechTranscriber.isEnhancing = enhancing
+            }
         }
     }
 

@@ -13,35 +13,38 @@ class OverlayState: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    /// Fix #9: Use sink + store(in:) instead of assign(to: &$prop) so that
+    /// Generic bind that works with any concrete transcriber type.
+    /// Avoids needing one overload per transcriber. Uses sink + store(in:) so that
     /// cancellables.removeAll() actually cancels subscriptions from the previous transcriber.
-    /// assign(to: &$property) ties lifetime to the Published property and ignores cancellables.
+    func bind(
+        isRecording: some Publisher<Bool, Never>,
+        audioLevel: some Publisher<Float, Never>,
+        transcribedText: some Publisher<String, Never>,
+        isEnhancing: some Publisher<Bool, Never>
+    ) {
+        cancellables.removeAll()
+        isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
+        audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
+        transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
+        isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
+    }
 
-    /// Binds to a SpeechTranscriber's published properties.
+    /// Convenience: bind to a SpeechTranscriber.
     func bind(to transcriber: SpeechTranscriber) {
-        cancellables.removeAll()
-        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
-        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
-        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
-        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
+        bind(isRecording: transcriber.$isRecording, audioLevel: transcriber.$audioLevel,
+             transcribedText: transcriber.$transcribedText, isEnhancing: transcriber.$isEnhancing)
     }
 
-    /// Binds to a WhisperTranscriber's published properties.
+    /// Convenience: bind to a WhisperTranscriber.
     func bind(to transcriber: WhisperTranscriber) {
-        cancellables.removeAll()
-        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
-        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
-        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
-        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
+        bind(isRecording: transcriber.$isRecording, audioLevel: transcriber.$audioLevel,
+             transcribedText: transcriber.$transcribedText, isEnhancing: transcriber.$isEnhancing)
     }
 
-    /// Binds to a FluidAudioTranscriber's published properties.
+    /// Convenience: bind to a FluidAudioTranscriber.
     func bind(to transcriber: FluidAudioTranscriber) {
-        cancellables.removeAll()
-        transcriber.$isRecording.sink { [weak self] in self?.isRecording = $0 }.store(in: &cancellables)
-        transcriber.$audioLevel.sink { [weak self] in self?.audioLevel = $0 }.store(in: &cancellables)
-        transcriber.$transcribedText.sink { [weak self] in self?.transcribedText = $0 }.store(in: &cancellables)
-        transcriber.$isEnhancing.sink { [weak self] in self?.isEnhancing = $0 }.store(in: &cancellables)
+        bind(isRecording: transcriber.$isRecording, audioLevel: transcriber.$audioLevel,
+             transcribedText: transcriber.$transcribedText, isEnhancing: transcriber.$isEnhancing)
     }
 
     func reset() {
@@ -81,11 +84,17 @@ class RecordingOverlayWindow: NSPanel {
     func show(state: OverlayState, notchMode: Bool = false) {
         self.isNotchMode = notchMode
 
-        let content = OverlayContent(state: state, notchMode: notchMode)
-        let hosting = NSHostingView(rootView: content)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        contentView = hosting
-        hostingView = hosting
+        // Reuse existing hosting view when mode hasn't changed, to avoid
+        // tearing down and recreating the SwiftUI view hierarchy every session.
+        if let existing = hostingView, existing.rootView.notchMode == notchMode {
+            // State is already @ObservedObject, so SwiftUI will pick up changes automatically.
+        } else {
+            let content = OverlayContent(state: state, notchMode: notchMode)
+            let hosting = NSHostingView(rootView: content)
+            hosting.translatesAutoresizingMaskIntoConstraints = false
+            contentView = hosting
+            hostingView = hosting
+        }
 
         if notchMode {
             // Notch mode: position at top-center, flush with top of screen

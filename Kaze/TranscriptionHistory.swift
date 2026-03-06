@@ -19,6 +19,46 @@ struct TranscriptionRecord: Codable, Identifiable {
     }
 }
 
+// MARK: - Serial Disk Writer
+
+/// A single-writer actor that serializes all JSON persistence.
+/// Each write awaits the previous one, and a short debounce coalesces rapid mutations
+/// so only the latest snapshot hits disk.
+actor SerialDiskWriter<T: Encodable> {
+    private let url: URL
+    private var pendingValue: T?
+    private var writeInFlight = false
+    private static var debounceNanoseconds: UInt64 { 150_000_000 } // 150ms
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    func enqueue(_ value: T) {
+        pendingValue = value
+        guard !writeInFlight else { return }
+        writeInFlight = true
+        Task { await drainLoop() }
+    }
+
+    private func drainLoop() {
+        while let value = pendingValue {
+            pendingValue = nil
+            do {
+                let data = try JSONEncoder().encode(value)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                print("SerialDiskWriter: Failed to save to \(url.lastPathComponent): \(error)")
+            }
+            // Short debounce: if another write was enqueued during encoding, coalesce.
+            if pendingValue == nil {
+                break
+            }
+        }
+        writeInFlight = false
+    }
+}
+
 // MARK: - TranscriptionHistoryManager
 
 /// Manages a persistent history of the last 50 transcriptions.
@@ -28,6 +68,7 @@ class TranscriptionHistoryManager: ObservableObject {
     @Published private(set) var records: [TranscriptionRecord] = []
 
     private static let maxRecords = 50
+    private let diskWriter: SerialDiskWriter<[TranscriptionRecord]>
 
     private static var historyFileURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -37,6 +78,7 @@ class TranscriptionHistoryManager: ObservableObject {
     }
 
     init() {
+        diskWriter = SerialDiskWriter(url: Self.historyFileURL)
         loadFromDisk()
     }
 
@@ -64,26 +106,14 @@ class TranscriptionHistoryManager: ObservableObject {
 
     // MARK: - Persistence
 
-    // Fix #11: Move synchronous disk I/O off the main thread
-
     private func saveToDisk() {
-        let records = self.records
-        let url = Self.historyFileURL
-        Task.detached(priority: .utility) {
-            do {
-                let data = try JSONEncoder().encode(records)
-                try data.write(to: url, options: .atomic)
-            } catch {
-                print("TranscriptionHistory: Failed to save: \(error)")
-            }
-        }
+        let snapshot = self.records
+        Task { await diskWriter.enqueue(snapshot) }
     }
 
     private func loadFromDisk() {
         let url = Self.historyFileURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        // For init-time load, we need the data synchronously to populate records
-        // before the UI reads them. Use a detached task that updates on MainActor.
         do {
             let data = try Data(contentsOf: url)
             records = try JSONDecoder().decode([TranscriptionRecord].self, from: data)
