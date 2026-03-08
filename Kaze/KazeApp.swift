@@ -395,6 +395,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func checkForUpdates() {
+        NSApp.activate(ignoringOtherApps: true)
         updaterManager.checkForUpdates()
     }
 

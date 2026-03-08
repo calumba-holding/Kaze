@@ -20,6 +20,27 @@
     -->
 
     <item>
+      <title>Version 0.72</title>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>0.72</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 08 Mar 2026 18:30:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.72</h2>
+        <ul>
+          <li>Fixed auto-update installer failing on sandboxed app</li>
+          <li>Fixed "Check for Updates" menu item not opening the update window</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.72/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="Ja8Di5gtohEd9gqFmRVGqUUJDIpAoKdpH3J23lienASthDjMDISwdjRcE5mtAeF0tSPYTIyBKkYucFHkw5gtDA=="
+        length="6475110"
+      />
+    </item>
+
+    <item>
       <title>Version 0.71</title>
       <sparkle:version>3</sparkle:version>
       <sparkle:shortVersionString>0.71</sparkle:shortVersionString>
