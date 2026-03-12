@@ -20,6 +20,29 @@
     -->
 
     <item>
+      <title>Version 0.76</title>
+      <sparkle:version>7</sparkle:version>
+      <sparkle:shortVersionString>0.76</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Wed, 12 Mar 2026 12:00:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.76</h2>
+        <ul>
+          <li>Redesigned onboarding with permissions step, model downloads, and brand icons</li>
+          <li>Reordered engines: Parakeet first (recommended/default), then Whisper, Qwen, Dictation</li>
+          <li>Real download progress bars for all engine models during onboarding</li>
+          <li>Fixed settings and about windows not appearing for accessory apps</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.76/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="aDx/KrjMxCXa8f+W3Or2vFf3le/F5MQ2GWFAmyiWuJx0mVYS+rdnk1ZDif2urlbZYD2aPwt1VYHCJwnMNh7vDQ=="
+        length="6569206"
+      />
+    </item>
+
+    <item>
       <title>Version 0.75</title>
       <sparkle:version>6</sparkle:version>
       <sparkle:shortVersionString>0.75</sparkle:shortVersionString>
