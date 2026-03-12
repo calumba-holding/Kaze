@@ -44,11 +44,19 @@ final class UpdaterManager: NSObject, ObservableObject {
 
     /// Call once after permissions and onboarding are resolved.
     func start() {
+        #if DEBUG
+        return
+        #else
         controller.startUpdater()
+        #endif
     }
 
     /// Programmatically trigger an update check (e.g. from a menu item).
     func checkForUpdates() {
+        #if DEBUG
+        return
+        #else
         controller.checkForUpdates(nil)
+        #endif
     }
 }

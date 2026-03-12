@@ -14,7 +14,7 @@
 
 /* Begin PBXFileReference section */
 		31A60D402F58948200550E29 /* KazeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KazeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		31F19CCD2F4D76D200E96913 /* Kaze.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Kaze.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		31F19CCD2F4D76D200E96913 /* Kaze Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kaze Dev.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -57,7 +57,7 @@
 		31F19CCE2F4D76D200E96913 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				31F19CCD2F4D76D200E96913 /* Kaze.app */,
+				31F19CCD2F4D76D200E96913 /* Kaze Dev.app */,
 				31A60D402F58948200550E29 /* KazeTests.xctest */,
 			);
 			name = Products;
@@ -107,7 +107,7 @@
 				31SPARKLE012F4D76D200E96913 /* Sparkle */,
 			);
 			productName = Kaze;
-			productReference = 31F19CCD2F4D76D200E96913 /* Kaze.app */;
+			productReference = 31F19CCD2F4D76D200E96913 /* Kaze Dev.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -364,7 +364,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kaze/Kaze.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = TB2S44TFQS;
 				ENABLE_APP_SANDBOX = YES;
@@ -375,7 +375,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Kaze/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Kaze;
+				INFOPLIST_KEY_CFBundleDisplayName = "Kaze Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kaze needs microphone access to transcribe your speech.";
@@ -385,9 +385,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.75;
-				PRODUCT_BUNDLE_IDENTIFIER = com.fayazahmed.Kaze;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				MARKETING_VERSION = 0.76;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fayazahmed.Kaze.dev;
+				PRODUCT_NAME = "Kaze Dev";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -407,7 +407,7 @@
 				CODE_SIGN_ENTITLEMENTS = Kaze/Kaze.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = TB2S44TFQS;
 				ENABLE_APP_SANDBOX = YES;
@@ -428,7 +428,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.75;
+				MARKETING_VERSION = 0.76;
 				PRODUCT_BUNDLE_IDENTIFIER = com.fayazahmed.Kaze;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

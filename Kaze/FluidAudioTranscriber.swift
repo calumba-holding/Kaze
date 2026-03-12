@@ -121,13 +121,38 @@ class FluidAudioModelManager: ObservableObject {
         }
     }
 
-    /// Downloads the model. FluidAudio handles the HuggingFace download internally.
+    /// Estimated total download size in bytes for progress estimation.
+    private var estimatedDownloadBytes: UInt64 {
+        switch model {
+        case .parakeet: return 600_000_000  // ~600 MB
+        case .qwen: return 2_500_000_000    // ~2.5 GB
+        }
+    }
+
+    /// Downloads the model. Polls directory size to estimate progress since FluidAudio
+    /// doesn't expose granular download progress callbacks.
     func downloadModel() async {
         guard case .notDownloaded = state else { return }
 
-        // FluidAudio's download APIs don't expose granular progress,
-        // so we show an indeterminate progress state.
-        state = .downloading(progress: -1)
+        state = .downloading(progress: 0)
+
+        // Start a background timer to poll download directory size for progress estimation.
+        let dir = modelDirectory
+        let expectedSize = estimatedDownloadBytes
+        let progressTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                let currentSize = (try? FileManager.default.allocatedSizeOfDirectory(at: dir)) ?? 0
+                let fraction = min(Double(currentSize) / Double(expectedSize), 0.95) // Cap at 95% until confirmed
+                await MainActor.run { [weak self, fraction] in
+                    guard let self else { return }
+                    if case .downloading = self.state {
+                        self.state = .downloading(progress: fraction)
+                    }
+                }
+            }
+        }
 
         let task = Task {
             do {
@@ -138,15 +163,18 @@ class FluidAudioModelManager: ObservableObject {
                     try await Qwen3AsrModels.download()
                 }
                 guard !Task.isCancelled else { return }
+                progressTask.cancel()
                 state = .downloaded
                 refreshModelSizeOnDisk()
             } catch {
                 guard !Task.isCancelled else { return }
+                progressTask.cancel()
                 state = .error("Download failed: \(error.localizedDescription)")
             }
         }
         downloadTask = task
         await task.value
+        progressTask.cancel()
         downloadTask = nil
     }
 

@@ -106,7 +106,8 @@ struct KazeApp: App {
                 qwenModelManager: appDelegate.qwenModelManager,
                 historyManager: appDelegate.historyManager,
                 customWordsManager: appDelegate.customWordsManager,
-                updaterManager: appDelegate.updaterManager
+                updaterManager: appDelegate.updaterManager,
+                restartOnboarding: appDelegate.restartOnboarding
             )
             .frame(width: 520, height: 600)
         }
@@ -116,7 +117,7 @@ struct KazeApp: App {
 // MARK: - AppDelegate
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let speechTranscriber = SpeechTranscriber()
     private var whisperTranscriber: WhisperTranscriber?
     private var fluidAudioTranscriber: FluidAudioTranscriber?
@@ -252,16 +253,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // fetches the appcast over the network and never touches the mic).
         updaterManager.start()
 
-        Task {
-            let granted = await speechTranscriber.requestPermissions()
-            if !granted {
-                showPermissionAlert()
-                return
-            }
-            setupHotkey()
-
-            if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
-                showOnboarding()
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            showOnboarding()
+        } else {
+            // Already completed onboarding — set up hotkey (permissions should already be granted)
+            Task {
+                await requestPermissionsAndSetupHotkey()
             }
         }
     }
@@ -317,8 +314,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var aboutWindowController: NSWindowController?
 
     @objc private func showAbout() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
         if let window = aboutWindowController?.window {
-            NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -336,11 +335,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "About Kaze"
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         let controller = NSWindowController(window: window)
         aboutWindowController = controller
-        NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func observeModelState() {
@@ -372,17 +372,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showOnboarding() {
-        let onboardingView = OnboardingView { [weak self] in
+        let onboardingView = OnboardingView(
+            whisperModelManager: whisperModelManager,
+            parakeetModelManager: parakeetModelManager,
+            qwenModelManager: qwenModelManager
+        ) { [weak self] in
             self?.onboardingWindowController?.window?.close()
             self?.onboardingWindowController = nil
-            // Reload hotkey in case the user changed it during onboarding
-            self?.hotkeyManager.shortcut = HotkeyShortcut.loadFromDefaults()
-            self?.hotkeyManager.mode = self?.hotkeyMode ?? .holdToTalk
+            // Set up hotkey and permissions now that onboarding is complete
+            Task { [weak self] in
+                await self?.requestPermissionsAndSetupHotkey()
+            }
         }
         let hostingController = NSHostingController(rootView: onboardingView)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -390,20 +395,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Welcome to Kaze"
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 480, height: 540))
 
-        // Manually center on the main screen
-        if let screen = NSScreen.main {
-            let screenFrame = screen.visibleFrame
-            let windowSize = window.frame.size
-            let x = screenFrame.midX - windowSize.width / 2
-            let y = screenFrame.midY - windowSize.height / 2
-            window.setFrameOrigin(NSPoint(x: x, y: y))
-        }
+        window.delegate = self
 
         let controller = NSWindowController(window: window)
         onboardingWindowController = controller
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        centerWindow(window)
+
+        // SwiftUI/AppKit can still adjust the final frame right after showing.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard self != nil, let window else { return }
+            self?.centerWindow(window)
+        }
+    }
+
+    private func centerWindow(_ window: NSWindow) {
+        if let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first {
+            let visibleFrame = screen.visibleFrame
+            let centeredFrame = NSRect(
+                x: visibleFrame.midX - window.frame.width / 2,
+                y: visibleFrame.midY - window.frame.height / 2,
+                width: window.frame.width,
+                height: window.frame.height
+            )
+            window.setFrame(centeredFrame, display: true)
+        } else {
+            window.center()
+        }
+    }
+
+    /// Requests microphone permissions (if needed) and sets up the global hotkey.
+    /// Called after onboarding completes or on subsequent launches.
+    func requestPermissionsAndSetupHotkey() async {
+        // Request microphone permission silently — if already granted this returns immediately
+        _ = await speechTranscriber.requestPermissions()
+        setupHotkey()
+    }
+
+    func restartOnboarding() {
+        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+        onboardingWindowController?.window?.close()
+        onboardingWindowController = nil
+        showOnboarding()
     }
 
     @objc private func checkForUpdates() {
@@ -412,8 +450,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
+        // Temporarily become a regular app so the window can receive focus
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
         if let window = settingsWindowController?.window {
-            NSApp.activate(ignoringOtherApps: true)
+            settingsWindowController?.showWindow(nil)
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -424,7 +466,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             qwenModelManager: qwenModelManager,
             historyManager: historyManager,
             customWordsManager: customWordsManager,
-            updaterManager: updaterManager
+            updaterManager: updaterManager,
+            restartOnboarding: restartOnboarding
         )
         .frame(width: 520, height: 600)
         let hostingController = NSHostingController(rootView: contentView)
@@ -441,11 +484,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Kaze Settings"
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
+        window.delegate = self
 
         let controller = NSWindowController(window: window)
         settingsWindowController = controller
-        NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+
+        if settingsWindowController?.window === window {
+            settingsWindowController = nil
+        }
+        if onboardingWindowController?.window === window {
+            onboardingWindowController = nil
+        }
+        if aboutWindowController?.window === window {
+            aboutWindowController = nil
+        }
+
+        // If no managed windows remain visible, revert to accessory (no dock icon)
+        let hasVisibleWindow = [settingsWindowController, onboardingWindowController, aboutWindowController]
+            .compactMap { $0?.window }
+            .contains { $0.isVisible }
+        if !hasVisibleWindow {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private func setupHotkey() {
@@ -459,7 +525,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let started = hotkeyManager.start()
         if !started {
-            showAccessibilityPermissionAlert()
+            print("[Kaze] Accessibility permission not granted yet — hotkey will not work until granted.")
         }
 
         // Observe changes to hotkey mode preference (Fix #6: early-exit avoids
@@ -771,27 +837,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Permissions Required"
-        alert.informativeText = "Kaze needs Microphone and Speech Recognition access. Please grant them in System Settings → Privacy & Security."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!)
-        }
-        NSApp.terminate(nil)
-    }
-
-    private func showAccessibilityPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = "Kaze needs Accessibility access to detect your global hotkey. Please enable Kaze in System Settings → Privacy & Security → Accessibility, then relaunch the app."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-        }
-        NSApp.terminate(nil)
+    /// Retries setting up the hotkey after the user grants Accessibility permission.
+    /// Called from the onboarding flow when accessibility is detected as granted.
+    func retryHotkeySetup() {
+        hotkeyManager.stop()
+        _ = hotkeyManager.start()
     }
 }

@@ -11,6 +11,7 @@ private enum SettingsTab: String, CaseIterable {
     case controls
     case vocabulary
     case history
+    case debug
 
     var title: String {
         switch self {
@@ -18,6 +19,7 @@ private enum SettingsTab: String, CaseIterable {
         case .controls: return "Controls"
         case .vocabulary: return "Vocabulary"
         case .history: return "History"
+        case .debug: return "Debug"
         }
     }
 
@@ -27,6 +29,7 @@ private enum SettingsTab: String, CaseIterable {
         case .controls: return "slider.horizontal.3"
         case .vocabulary: return "text.book.closed"
         case .history: return "clock.arrow.circlepath"
+        case .debug: return "ladybug"
         }
     }
 }
@@ -40,6 +43,7 @@ struct ContentView: View {
     @ObservedObject var historyManager: TranscriptionHistoryManager
     @ObservedObject var customWordsManager: CustomWordsManager
     @ObservedObject var updaterManager: UpdaterManager
+    let restartOnboarding: () -> Void
 
     @State private var selectedTab: SettingsTab = .general
 
@@ -65,6 +69,8 @@ struct ContentView: View {
                     VocabularySettingsView(customWordsManager: customWordsManager)
                 case .history:
                     HistorySettingsView(historyManager: historyManager)
+                case .debug:
+                    DebugSettingsView(restartOnboarding: restartOnboarding)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -483,21 +489,12 @@ private struct GeneralSettingsView: View {
 
         case .downloading(let progress):
             HStack(spacing: 8) {
-                if progress < 0 {
-                    // Indeterminate progress (FluidAudio doesn't expose granular progress)
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Downloading...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ProgressView(value: progress)
-                        .frame(maxWidth: 140)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
+                ProgressView(value: max(progress, 0))
+                    .frame(maxWidth: 140)
+                Text("\(Int(max(progress, 0) * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
                 Button("Cancel", role: .destructive) {
                     manager.cancelDownload()
                 }
@@ -786,10 +783,9 @@ private struct HistorySettingsView: View {
 
     private func historyRow(for record: TranscriptionRecord) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: historyIconName(for: record.engine))
-                .font(.caption)
+            historyIconView(for: record.engine)
                 .foregroundStyle(.tertiary)
-                .frame(width: 16, alignment: .center)
+                .frame(width: 16, height: 16, alignment: .center)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -832,12 +828,27 @@ private struct HistorySettingsView: View {
         .padding(.vertical, 8)
     }
 
-    private func historyIconName(for engine: String) -> String {
+    @ViewBuilder
+    private func historyIconView(for engine: String) -> some View {
         switch engine {
-        case "whisper": return "waveform"
-        case "parakeet": return "bird"
-        case "qwen": return "brain.head.profile"
-        default: return "mic.fill"
+        case "whisper":
+            Image("openai-icon")
+                .renderingMode(.template)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        case "parakeet":
+            Image("nvidia-icon")
+                .renderingMode(.template)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        case "qwen":
+            Image("qwen-icon")
+                .renderingMode(.template)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        default:
+            Text("\u{F8FF}")
+                .font(.system(size: 14))
         }
     }
 }
@@ -945,6 +956,32 @@ private struct VocabularySettingsView: View {
             .help("Remove word")
         }
         .padding(.vertical, 8)
+    }
+}
+
+private struct DebugSettingsView: View {
+    let restartOnboarding: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                formRow("Onboarding:") {
+                    Button("Restart Onboarding") {
+                        restartOnboarding()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                formRow("") {
+                    Text("Reopens the first-launch onboarding flow for testing.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 20)
+            }
+            .padding(.top, 12)
+        }
     }
 }
 
