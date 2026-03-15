@@ -20,6 +20,26 @@
     -->
 
     <item>
+      <title>Version 0.78</title>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>0.78</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Sun, 15 Mar 2026 16:25:25 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.78</h2>
+        <ul>
+          <li>You can now remove filler words like umm, um, uh and erss from your transcription.</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.78/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="/0fkG6CM38njFdflsnSd/haLy2LkX4FiUDl/kk/TPWqpQTXod90IN3mJlLtAjBQn/fWtSirTQDBbX45gHRcEBQ=="
+        length="6575564"
+      />
+    </item>
+
+    <item>
       <title>Version 0.77</title>
       <sparkle:version>8</sparkle:version>
       <sparkle:shortVersionString>0.77</sparkle:shortVersionString>
