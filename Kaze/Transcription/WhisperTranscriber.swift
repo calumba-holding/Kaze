@@ -252,6 +252,32 @@ class WhisperModelManager: ObservableObject {
     /// Whether a loaded runtime instance is available.
     var isLoaded: Bool { whisperKit != nil }
 
+    /// Whether the selected variant can currently be used for transcription.
+    var isAvailableForTranscription: Bool {
+        switch state {
+        case .downloaded, .ready, .loading:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isDownloading: Bool {
+        if case .downloading = state {
+            return true
+        }
+        return false
+    }
+
+    var isBusy: Bool {
+        switch state {
+        case .downloading, .loading:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Size of the currently selected model on disk (cached, not computed on every view redraw).
     var modelSizeOnDisk: String { modelSizeOnDiskCached }
 

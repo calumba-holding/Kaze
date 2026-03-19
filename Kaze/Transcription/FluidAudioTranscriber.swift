@@ -340,6 +340,23 @@ class FluidAudioModelManager: ObservableObject {
         parakeetManager != nil || qwen3Manager != nil
     }
 
+    /// Whether the downloaded model can currently be used for transcription.
+    var isAvailableForTranscription: Bool {
+        switch state {
+        case .downloaded, .ready, .loading:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isDownloading: Bool {
+        if case .downloading = state {
+            return true
+        }
+        return false
+    }
+
     private func normalizeTranscript(_ text: String) -> String {
         text
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)

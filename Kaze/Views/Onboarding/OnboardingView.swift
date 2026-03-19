@@ -9,9 +9,6 @@ import Speech
 struct OnboardingView: View {
     @State private var currentStep = 0
     @State private var hotkeyShortcut = HotkeyShortcut.default
-    @State private var isRecordingHotkey = false
-    @State private var hotkeyMonitor: Any?
-    @State private var recordedModifiersUnion: HotkeyShortcut.Modifiers = []
     @AppStorage(AppPreferenceKey.transcriptionEngine) private var engineRaw = TranscriptionEngine.parakeet.rawValue
     @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
 
@@ -24,6 +21,7 @@ struct OnboardingView: View {
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
     @ObservedObject var qwenModelManager: FluidAudioModelManager
+    @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
     var onComplete: () -> Void
 
@@ -35,65 +33,25 @@ struct OnboardingView: View {
 
     /// Whether the engine step requires a model download and the model isn't already downloaded.
     private var needsModelDownload: Bool {
-        guard selectedEngine.requiresModelDownload else { return false }
-        switch selectedEngine {
-        case .whisper:
-            switch whisperModelManager.state {
-            case .downloaded, .ready, .loading: return false
-            default: return true
-            }
-        case .parakeet:
-            switch parakeetModelManager.state {
-            case .downloaded, .ready, .loading: return false
-            default: return true
-            }
-        case .qwen:
-            switch qwenModelManager.state {
-            case .downloaded, .ready, .loading: return false
-            default: return true
-            }
-        default:
-            return false
-        }
+        selectedEngine.requiresModelDownload && !isModelReady
     }
 
     /// Whether the selected model is currently downloading.
     private var isModelDownloading: Bool {
-        switch selectedEngine {
-        case .whisper:
-            if case .downloading = whisperModelManager.state { return true }
-        case .parakeet:
-            if case .downloading = parakeetModelManager.state { return true }
-        case .qwen:
-            if case .downloading = qwenModelManager.state { return true }
-        default:
-            break
-        }
-        return false
+        selectedEngine.isModelDownloading(
+            whisperManager: whisperModelManager,
+            parakeetManager: parakeetModelManager,
+            qwenManager: qwenModelManager
+        )
     }
 
     /// Whether the selected model has been downloaded (or doesn't need one).
     private var isModelReady: Bool {
-        if !selectedEngine.requiresModelDownload { return true }
-        switch selectedEngine {
-        case .whisper:
-            switch whisperModelManager.state {
-            case .downloaded, .ready, .loading: return true
-            default: return false
-            }
-        case .parakeet:
-            switch parakeetModelManager.state {
-            case .downloaded, .ready, .loading: return true
-            default: return false
-            }
-        case .qwen:
-            switch qwenModelManager.state {
-            case .downloaded, .ready, .loading: return true
-            default: return false
-            }
-        default:
-            return false
-        }
+        selectedEngine.isModelReady(
+            whisperManager: whisperModelManager,
+            parakeetManager: parakeetModelManager,
+            qwenManager: qwenModelManager
+        )
     }
 
     var body: some View {
@@ -130,7 +88,7 @@ struct OnboardingView: View {
 
                 if currentStep > 0 && currentStep < totalSteps - 1 {
                     Button("Back") {
-                        stopHotkeyRecording()
+                        hotkeyRecorder.stop()
                         if currentStep == 5 && !selectedEngine.requiresModelDownload {
                             // Skipped model download step — go back to engine selection
                             currentStep = 3
@@ -143,7 +101,7 @@ struct OnboardingView: View {
 
                 if currentStep < totalSteps - 1 {
                     Button("Continue") {
-                        stopHotkeyRecording()
+                        hotkeyRecorder.stop()
                         if currentStep == 2 {
                             // Save hotkey before advancing
                             hotkeyShortcut.saveToDefaults()
@@ -165,7 +123,7 @@ struct OnboardingView: View {
                 } else {
                     Button("Get Started") {
                         hotkeyShortcut.saveToDefaults()
-                        UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+                        UserDefaults.standard.set(true, forKey: AppPreferenceKey.hasCompletedOnboarding)
                         onComplete()
                     }
                     .keyboardShortcut(.return, modifiers: [])
@@ -177,8 +135,13 @@ struct OnboardingView: View {
             .padding(.vertical, 14)
         }
         .frame(width: 480, height: 540)
+        .onAppear {
+            hotkeyRecorder.onShortcutRecorded = { shortcut in
+                hotkeyShortcut = shortcut
+            }
+        }
         .onDisappear {
-            stopHotkeyRecording()
+            hotkeyRecorder.stop()
             stopPermissionPolling()
         }
     }
@@ -400,23 +363,23 @@ struct OnboardingView: View {
                     }
                 }
 
-                Button(isRecordingHotkey ? "Press keys..." : "Change") {
-                    if isRecordingHotkey {
-                        stopHotkeyRecording()
+                Button(hotkeyRecorder.isRecording ? "Press keys..." : "Change") {
+                    if hotkeyRecorder.isRecording {
+                        hotkeyRecorder.stop()
                     } else {
-                        startHotkeyRecording()
+                        hotkeyRecorder.start()
                     }
                 }
                 .controlSize(.small)
 
                 Button("Reset") {
                     hotkeyShortcut = .default
-                    stopHotkeyRecording()
+                    hotkeyRecorder.stop()
                 }
                 .controlSize(.small)
             }
 
-            if isRecordingHotkey {
+            if hotkeyRecorder.isRecording {
                 Text("Press a key combination with at least one modifier. Press Esc to cancel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -448,7 +411,7 @@ struct OnboardingView: View {
 
             VStack(spacing: 4) {
                 // Order: Parakeet first (recommended), then others
-                ForEach(engineOrder, id: \.self) { engine in
+                ForEach(TranscriptionEngine.onboardingOrder, id: \.self) { engine in
                     Button {
                         engineRaw = engine.rawValue
                     } label: {
@@ -473,7 +436,7 @@ struct OnboardingView: View {
                                             .foregroundStyle(engineRaw == engine.rawValue ? .white : .accentColor)
                                     }
                                 }
-                                Text(engineDescription(for: engine))
+                                Text(engine.onboardingDescription)
                                     .font(.caption2)
                                     .lineLimit(2)
                                     .opacity(0.8)
@@ -501,11 +464,6 @@ struct OnboardingView: View {
 
             Spacer()
         }
-    }
-
-    /// Engine order: Parakeet first (default/recommended)
-    private var engineOrder: [TranscriptionEngine] {
-        [.parakeet, .whisper, .qwen, .dictation]
     }
 
     // MARK: - Step 5: Model Download
@@ -702,68 +660,6 @@ struct OnboardingView: View {
         }
     }
 
-    private func engineDescription(for engine: TranscriptionEngine) -> String {
-        switch engine {
-        case .parakeet:
-            return "Best accuracy, blazing fast. English only. ~600 MB download."
-        case .whisper:
-            return "OpenAI's Whisper running locally. Multiple sizes available."
-        case .qwen:
-            return "Fast multilingual (30+ languages). ~2.5 GB download."
-        case .dictation:
-            return "Apple's built-in speech recognition. No download required."
-        }
-    }
-
-    // MARK: - Hotkey Recording (mirrors ContentView logic)
-
-    private func startHotkeyRecording() {
-        stopHotkeyRecording()
-        isRecordingHotkey = true
-        recordedModifiersUnion = []
-
-        hotkeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
-            if !isRecordingHotkey { return event }
-
-            if event.type == .flagsChanged {
-                let modifiers = HotkeyShortcut.Modifiers(from: event.modifierFlags)
-                if !modifiers.isEmpty {
-                    recordedModifiersUnion.formUnion(modifiers)
-                    return nil
-                }
-                if !recordedModifiersUnion.isEmpty {
-                    hotkeyShortcut = HotkeyShortcut(modifiers: recordedModifiersUnion, keyCode: nil)
-                    stopHotkeyRecording()
-                    return nil
-                }
-                return nil
-            }
-
-            if event.keyCode == 53 { // Escape
-                stopHotkeyRecording()
-                return nil
-            }
-
-            let modifiers = HotkeyShortcut.Modifiers(from: event.modifierFlags)
-            guard !modifiers.isEmpty else {
-                NSSound.beep()
-                return nil
-            }
-
-            hotkeyShortcut = HotkeyShortcut(modifiers: modifiers, keyCode: Int(event.keyCode))
-            stopHotkeyRecording()
-            return nil
-        }
-    }
-
-    private func stopHotkeyRecording() {
-        isRecordingHotkey = false
-        recordedModifiersUnion = []
-        if let hotkeyMonitor {
-            NSEvent.removeMonitor(hotkeyMonitor)
-            self.hotkeyMonitor = nil
-        }
-    }
 }
 
 // MARK: - Onboarding Key Cap View

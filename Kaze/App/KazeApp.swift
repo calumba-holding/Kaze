@@ -2,99 +2,6 @@ import SwiftUI
 import AppKit
 import Combine
 
-enum TranscriptionEngine: String, CaseIterable, Identifiable {
-    case dictation
-    case whisper
-    case parakeet
-    case qwen
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .dictation: return "Direct Dictation"
-        case .whisper: return "Whisper (OpenAI)"
-        case .parakeet: return "Parakeet v3 (NVIDIA)"
-        case .qwen: return "Qwen3 ASR (Alibaba)"
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .dictation: return "Uses Apple's built-in speech recognition. Works immediately with no setup."
-        case .whisper: return "Uses OpenAI's Whisper model running locally on your Mac. Requires a one-time download."
-        case .parakeet: return "NVIDIA's Parakeet TDT 0.6B v3 via CoreML. Top-ranked accuracy, blazing fast. English only."
-        case .qwen: return "Alibaba's Qwen3 ASR 0.6B via CoreML. Fast multilingual transcription with 30+ languages."
-        }
-    }
-
-    /// Whether this engine requires a model download before use.
-    var requiresModelDownload: Bool {
-        switch self {
-        case .dictation: return false
-        case .whisper, .parakeet, .qwen: return true
-        }
-    }
-}
-
-enum HotkeyMode: String, CaseIterable, Identifiable {
-    case holdToTalk
-    case toggle
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .holdToTalk: return "Hold to Talk"
-        case .toggle: return "Press to Toggle"
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .holdToTalk: return "Hold the hotkey to record, release to stop."
-        case .toggle: return "Press the hotkey once to start, press again to stop."
-        }
-    }
-}
-
-enum EnhancementMode: String, CaseIterable, Identifiable {
-    case off
-    case appleIntelligence
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .off: return "Off"
-        case .appleIntelligence: return "Apple Intelligence"
-        }
-    }
-}
-
-enum AppPreferenceKey {
-    static let transcriptionEngine = "transcriptionEngine"
-    static let enhancementMode = "enhancementMode"
-    static let enhancementSystemPrompt = "enhancementSystemPrompt"
-    static let hotkeyMode = "hotkeyMode"
-    static let hotkeyShortcut = "hotkeyShortcut"
-    static let whisperModelVariant = "whisperModelVariant"
-    static let fluidAudioModelState = "fluidAudioModelState"
-    static let notchMode = "notchMode"
-    static let selectedMicrophoneID = "selectedMicrophoneID"
-    static let appendTrailingSpace = "appendTrailingSpace"
-    static let removeFillerWords = "removeFillerWords"
-    static let launchAtLogin = "launchAtLogin"
-
-    static let defaultEnhancementPrompt = """
-        You are Kaze, a speech-to-text transcription assistant. Your only job is to \
-        enhance raw transcription output. Fix punctuation, add missing commas, correct \
-        capitalization, and improve formatting. Do not alter the meaning, tone, or \
-        substance of the text. Do not add, remove, or rephrase any content. Do not \
-        add commentary or explanations. Return only the cleaned-up text.
-        """
-}
-
 @main
 struct KazeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -258,7 +165,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // fetches the appcast over the network and never touches the mic).
         updaterManager.start()
 
-        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+        if !UserDefaults.standard.bool(forKey: AppPreferenceKey.hasCompletedOnboarding) {
             showOnboarding()
         } else {
             // Already completed onboarding — set up hotkey (permissions should already be granted)
@@ -451,7 +358,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func restartOnboarding() {
-        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+        UserDefaults.standard.set(false, forKey: AppPreferenceKey.hasCompletedOnboarding)
         onboardingWindowController?.window?.close()
         onboardingWindowController = nil
         showOnboarding()
@@ -577,7 +484,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let enhancement = enhancementMode
 
         // Check if the selected engine's model is available
-        if engine.requiresModelDownload && !isEngineReady(engine) {
+        if engine.requiresModelDownload && !engine.isModelReady(
+            whisperManager: whisperModelManager,
+            parakeetManager: parakeetModelManager,
+            qwenManager: qwenModelManager
+        ) {
             print("\(engine.title) model not ready, falling back to Direct Dictation")
         }
 
@@ -589,7 +500,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let micUID = selectedMicrophoneUID
 
         // Use the appropriate transcriber
-        if engine == .whisper, isEngineReady(.whisper) {
+        if engine == .whisper, engine.isModelReady(
+            whisperManager: whisperModelManager,
+            parakeetManager: parakeetModelManager,
+            qwenManager: qwenModelManager
+        ) {
             let whisper = whisperTranscriber ?? WhisperTranscriber(modelManager: whisperModelManager)
             whisperTranscriber = whisper
             whisper.customWords = words
@@ -602,7 +517,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayState.bind(to: whisper)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             whisper.startRecording()
-        } else if (engine == .parakeet || engine == .qwen), isEngineReady(engine) {
+        } else if (engine == .parakeet || engine == .qwen), engine.isModelReady(
+            whisperManager: whisperModelManager,
+            parakeetManager: parakeetModelManager,
+            qwenManager: qwenModelManager
+        ) {
             let manager = engine == .parakeet ? parakeetModelManager : qwenModelManager
             let model: FluidAudioModel = engine == .parakeet ? .parakeet : .qwen
             let transcriber = getOrCreateFluidAudioTranscriber(model: model, manager: manager)
@@ -626,35 +545,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayState.bind(to: speechTranscriber)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             speechTranscriber.startRecording()
-        }
-    }
-
-    /// Whether the given engine's model is downloaded and available for use.
-    private func isEngineReady(_ engine: TranscriptionEngine) -> Bool {
-        switch engine {
-        case .dictation:
-            return true
-        case .whisper:
-            switch whisperModelManager.state {
-            case .downloaded, .ready, .loading:
-                return true
-            default:
-                return false
-            }
-        case .parakeet:
-            switch parakeetModelManager.state {
-            case .downloaded, .ready, .loading:
-                return true
-            default:
-                return false
-            }
-        case .qwen:
-            switch qwenModelManager.state {
-            case .downloaded, .ready, .loading:
-                return true
-            default:
-                return false
-            }
         }
     }
 
