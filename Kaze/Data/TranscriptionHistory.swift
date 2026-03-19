@@ -38,7 +38,7 @@ actor SerialDiskWriter<T: Encodable> {
         pendingValue = value
         guard !writeInFlight else { return }
         writeInFlight = true
-        Task { await drainLoop() }
+        Task { self.drainLoop() }
     }
 
     private func drainLoop() {

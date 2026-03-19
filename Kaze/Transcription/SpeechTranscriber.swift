@@ -29,7 +29,8 @@ class SpeechTranscriber: ObservableObject, TranscriberProtocol {
     }
 
     deinit {
-        microphoneCapture.stop()
+        let capture = microphoneCapture
+        Task { @MainActor in capture.stop() }
     }
 
     func requestPermissions() async -> Bool {

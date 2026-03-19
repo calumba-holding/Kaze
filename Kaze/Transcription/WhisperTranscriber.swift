@@ -344,7 +344,8 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
 
     deinit {
         transcriptionTask?.cancel()
-        microphoneCapture.stop()
+        let capture = microphoneCapture
+        Task { @MainActor in capture.stop() }
     }
 
     func requestPermissions() async -> Bool {
