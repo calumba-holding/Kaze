@@ -10,6 +10,7 @@ private enum SettingsTab: String, CaseIterable {
     case general
     case controls
     case vocabulary
+    case stats
     case history
     case debug
 
@@ -18,6 +19,7 @@ private enum SettingsTab: String, CaseIterable {
         case .general: return "General"
         case .controls: return "Controls"
         case .vocabulary: return "Vocabulary"
+        case .stats: return "Stats"
         case .history: return "History"
         case .debug: return "Debug"
         }
@@ -28,6 +30,7 @@ private enum SettingsTab: String, CaseIterable {
         case .general: return "gearshape"
         case .controls: return "slider.horizontal.3"
         case .vocabulary: return "text.book.closed"
+        case .stats: return "chart.bar.xaxis"
         case .history: return "clock.arrow.circlepath"
         case .debug: return "ladybug"
         }
@@ -67,6 +70,8 @@ struct ContentView: View {
                     ControlsSettingsView(updaterManager: updaterManager)
                 case .vocabulary:
                     VocabularySettingsView(customWordsManager: customWordsManager)
+                case .stats:
+                    StatsSettingsView(historyManager: historyManager)
                 case .history:
                     HistorySettingsView(historyManager: historyManager)
                 case .debug:
@@ -679,6 +684,360 @@ private struct ControlsSettingsView: View {
     }
 }
 
+private struct StatsSettingsView: View {
+    @ObservedObject var historyManager: TranscriptionHistoryManager
+    private let windowDays = TranscriptionStatsSnapshot.defaultWindowDays
+    private let activityColumnCount = 10
+    private let activityGridSpacing: CGFloat = 8
+
+    private let metricColumns = [
+        GridItem(.flexible(minimum: 0), spacing: 12),
+        GridItem(.flexible(minimum: 0), spacing: 12),
+        GridItem(.flexible(minimum: 0), spacing: 12)
+    ]
+
+    private var summary: TranscriptionStatsSnapshot.WindowedSummary {
+        historyManager.stats.summary(forLast: windowDays)
+    }
+
+    private var topSources: [TranscriptionStatsSnapshot.SourceUsage] {
+        Array(summary.topSources.prefix(5))
+    }
+
+    private var activityDays: [StatsActivityDay] {
+        let calendar = Calendar.autoupdatingCurrent
+        let today = calendar.startOfDay(for: Date())
+        let wordsByDay = Dictionary(uniqueKeysWithValues: summary.dailyActivity.map {
+            (calendar.startOfDay(for: $0.date), $0.words)
+        })
+
+        return (0..<windowDays).compactMap { offset in
+            guard let date = calendar.date(byAdding: .day, value: offset - (windowDays - 1), to: today) else {
+                return nil
+            }
+            return StatsActivityDay(date: date, words: wordsByDay[date] ?? 0)
+        }
+    }
+
+    private var activityGridColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: activityGridSpacing),
+            count: activityColumnCount
+        )
+    }
+
+    private var activityPeak: Int {
+        max(activityDays.map(\.words).max() ?? 0, 1)
+    }
+
+    private var activeDaysInWindow: Int {
+        activityDays.reduce(into: 0) { count, day in
+            if day.words > 0 {
+                count += 1
+            }
+        }
+    }
+
+    private var subtitle: String {
+        if summary.totalSessions == 0 {
+            return historyManager.records.isEmpty
+                ? "Dictate something and your usage will show up here."
+                : "Usage stats start tracking with your next transcription."
+        }
+
+        return "\(summary.totalSessions.formattedCount) dictated session\(summary.totalSessions == 1 ? "" : "s") in the last \(windowDays) days."
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Usage Overview")
+                        .font(.headline)
+
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+
+                LazyVGrid(columns: metricColumns, spacing: 12) {
+                    StatsMetricCard(
+                        title: "Total words",
+                        value: summary.totalWords.formattedCount,
+                        detail: "\(summary.totalSessions.formattedCount) session\(summary.totalSessions == 1 ? "" : "s")"
+                    )
+
+                    StatsMetricCard(
+                        title: "Time saved",
+                        value: summary.estimatedTimeSaved.statsDurationString,
+                        detail: "Vs 40 WPM typing"
+                    )
+
+                    StatsMetricCard(
+                        title: "Speed",
+                        value: summary.averageWordsPerMinute.map { "\($0.wpmString) WPM" } ?? "--",
+                        detail: summary.averageWordsPerMinute == nil ? "Needs captured speech time" : "Average speaking speed"
+                    )
+                }
+                .padding(.horizontal, 20)
+
+                activitySection
+                    .padding(.horizontal, 20)
+
+                topSourcesSection
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+            }
+        }
+    }
+
+    private var topSourcesSection: some View {
+        StatsPanel(
+            title: "Top Sources",
+            subtitle: "Where Kaze is used the most in the last \(windowDays) days"
+        ) {
+            if topSources.isEmpty {
+                StatsEmptyState(
+                    systemImage: "app.badge",
+                    title: "No sources yet",
+                    message: "App usage appears here after your next dictated session."
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(topSources) { source in
+                        HStack(spacing: 12) {
+                            SourceAppIconView(
+                                bundleIdentifier: source.bundleIdentifier,
+                                displayName: source.name
+                            )
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.name)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .lineLimit(1)
+
+                                Text("\(source.sessions.formattedCount) session\(source.sessions == 1 ? "" : "s")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 12)
+
+                            Text("\(source.words.formattedCount) words")
+                                .font(.system(size: 13, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 10)
+
+                        if source.id != topSources.last?.id {
+                            Divider()
+                                .padding(.leading, 42)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var activitySection: some View {
+        StatsPanel(
+            title: "Activity",
+            subtitle: "Last \(windowDays) days"
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                LazyVGrid(columns: activityGridColumns, alignment: .leading, spacing: activityGridSpacing) {
+                    ForEach(activityDays) { day in
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color.accentColor.opacity(activityOpacity(for: day.words)))
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(
+                                        Calendar.autoupdatingCurrent.isDateInToday(day.date)
+                                            ? Color.accentColor.opacity(0.8)
+                                            : Color.primary.opacity(0.08),
+                                        lineWidth: Calendar.autoupdatingCurrent.isDateInToday(day.date) ? 1 : 0.5
+                                    )
+                            }
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(.quaternary.opacity(0.28))
+                            )
+                            .help(day.date.activityTooltip(words: day.words))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text("\(activeDaysInWindow.formattedCount) active day\(activeDaysInWindow == 1 ? "" : "s") in the last \(windowDays) days")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func activityOpacity(for words: Int) -> Double {
+        guard words > 0 else { return 0.06 }
+        let normalized = Double(words) / Double(activityPeak)
+        return 0.18 + (normalized * 0.72)
+    }
+}
+
+private struct StatsMetricCard: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .minimumScaleFactor(0.75)
+                .lineLimit(1)
+                .foregroundStyle(.primary)
+
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.quaternary.opacity(0.24))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+}
+
+private struct StatsPanel<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let content: Content
+
+    init(title: String, subtitle: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.quaternary.opacity(0.18))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+}
+
+private struct StatsEmptyState: View {
+    let systemImage: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 24))
+                .foregroundStyle(.quaternary)
+
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+    }
+}
+
+private struct SourceAppIconView: View {
+    let bundleIdentifier: String?
+    let displayName: String
+
+    private var appIcon: NSImage? {
+        guard
+            let bundleIdentifier,
+            let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+        else {
+            return nil
+        }
+
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        icon.size = NSSize(width: 28, height: 28)
+        return icon
+    }
+
+    private var fallbackLetter: String {
+        String(displayName.prefix(1)).uppercased()
+    }
+
+    var body: some View {
+        Group {
+            if let appIcon {
+                Image(nsImage: appIcon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(.quaternary.opacity(0.35))
+
+                    Text(fallbackLetter)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(width: 28, height: 28)
+            }
+        }
+    }
+}
+
+private struct StatsActivityDay: Identifiable {
+    let date: Date
+    let words: Int
+
+    var id: Date { date }
+}
+
 // MARK: - History Tab
 
 private struct HistorySettingsView: View {
@@ -1112,6 +1471,55 @@ struct AboutView: View {
         } catch {
             // Silently fail — the about view works fine without the avatar
         }
+    }
+}
+
+private extension Int {
+    var formattedCount: String {
+        formatted(.number.grouping(.automatic))
+    }
+}
+
+private extension Double {
+    var wpmString: String {
+        Int(rounded()).formatted(.number.grouping(.never))
+    }
+}
+
+private extension TimeInterval {
+    var statsDurationString: String {
+        let totalMinutes = max(Int((self / 60).rounded()), 0)
+
+        if totalMinutes == 0 {
+            return "0m"
+        }
+
+        let days = totalMinutes / (60 * 24)
+        let hours = (totalMinutes % (60 * 24)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            if hours > 0 {
+                return "\(days)d \(hours)h"
+            }
+            return "\(days)d"
+        }
+
+        if hours > 0 {
+            if minutes > 0 {
+                return "\(hours)h \(minutes)m"
+            }
+            return "\(hours)h"
+        }
+
+        return "\(minutes)m"
+    }
+}
+
+private extension Date {
+    func activityTooltip(words: Int) -> String {
+        let wordsLabel = "\(words.formatted(.number.grouping(.automatic))) word\(words == 1 ? "" : "s")"
+        return "\(formatted(date: .abbreviated, time: .omitted)): \(wordsLabel)"
     }
 }
 

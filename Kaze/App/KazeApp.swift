@@ -17,7 +17,7 @@ struct KazeApp: App {
                 updaterManager: appDelegate.updaterManager,
                 restartOnboarding: appDelegate.restartOnboarding
             )
-            .frame(width: 520, height: 600)
+            .frame(width: 620, height: 680)
         }
     }
 }
@@ -105,6 +105,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let engine: TranscriptionEngine
         let enhancementMode: EnhancementMode
         let transcriber: any TranscriberProtocol
+        let source: TranscriptionSource?
+        let startedAt: Date
+        var endedAt: Date?
+
+        var speechDuration: TimeInterval {
+            max((endedAt ?? Date()).timeIntervalSince(startedAt), 0)
+        }
     }
 
     /// The active recording session, non-nil while `isSessionActive` is true.
@@ -480,16 +487,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Capture engine and enhancement mode at session start so that mid-session
         // preference changes cannot route stop/finalize through the wrong engine.
-        let engine = transcriptionEngine
+        let preferredEngine = transcriptionEngine
+        let engine: TranscriptionEngine
         let enhancement = enhancementMode
+        let source = currentSourceApplication()
 
         // Check if the selected engine's model is available
-        if engine.requiresModelDownload && !engine.isModelReady(
+        if preferredEngine.requiresModelDownload && !preferredEngine.isModelReady(
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager,
             qwenManager: qwenModelManager
         ) {
-            print("\(engine.title) model not ready, falling back to Direct Dictation")
+            print("\(preferredEngine.title) model not ready, falling back to Direct Dictation")
+            engine = .dictation
+        } else {
+            engine = preferredEngine
         }
 
         isSessionActive = true
@@ -513,7 +525,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
-            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: whisper)
+            activeSession = RecordingSession(
+                engine: engine,
+                enhancementMode: enhancement,
+                transcriber: whisper,
+                source: source,
+                startedAt: Date()
+            )
             overlayState.bind(to: whisper)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             whisper.startRecording()
@@ -530,7 +548,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
-            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: transcriber)
+            activeSession = RecordingSession(
+                engine: engine,
+                enhancementMode: enhancement,
+                transcriber: transcriber,
+                source: source,
+                startedAt: Date()
+            )
             overlayState.bind(to: transcriber)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             transcriber.startRecording()
@@ -541,7 +565,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self else { return }
                 self.processTranscription(text)
             }
-            activeSession = RecordingSession(engine: engine, enhancementMode: enhancement, transcriber: speechTranscriber)
+            activeSession = RecordingSession(
+                engine: engine,
+                enhancementMode: enhancement,
+                transcriber: speechTranscriber,
+                source: source,
+                startedAt: Date()
+            )
             overlayState.bind(to: speechTranscriber)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             speechTranscriber.startRecording()
@@ -550,6 +580,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func endRecording() {
         guard isSessionActive, let session = activeSession else { return }
+        activeSession?.endedAt = Date()
 
         let engine = session.engine
 
@@ -603,6 +634,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let engine = session?.engine ?? transcriptionEngine
         let enhancement = session?.enhancementMode ?? enhancementMode
+        let speechDuration = session?.speechDuration ?? 0
+        let source = session?.source
 
         // Only apply AI enhancement for Direct Dictation — AI models already produce enhanced output.
         if enhancement == .appleIntelligence, engine == .dictation, let enhancer {
@@ -630,26 +663,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         let enhanced = try await enhancer.enhance(cleanedText, systemPrompt: prompt)
                         self.typeText(enhanced)
                         self.historyManager.addRecord(
-                            TranscriptionRecord(text: enhanced, engine: engine, wasEnhanced: true)
+                            TranscriptionRecord(
+                                text: enhanced,
+                                engine: engine,
+                                wasEnhanced: true,
+                                speechDuration: speechDuration,
+                                source: source
+                            )
                         )
                     } else {
                         self.typeText(cleanedText)
                         self.historyManager.addRecord(
-                            TranscriptionRecord(text: cleanedText, engine: engine, wasEnhanced: false)
+                            TranscriptionRecord(
+                                text: cleanedText,
+                                engine: engine,
+                                wasEnhanced: false,
+                                speechDuration: speechDuration,
+                                source: source
+                            )
                         )
                     }
                 } catch {
                     print("AI enhancement failed, using raw text: \(error)")
                     self.typeText(cleanedText)
                     self.historyManager.addRecord(
-                        TranscriptionRecord(text: cleanedText, engine: engine, wasEnhanced: false)
+                        TranscriptionRecord(
+                            text: cleanedText,
+                            engine: engine,
+                            wasEnhanced: false,
+                            speechDuration: speechDuration,
+                            source: source
+                        )
                     )
                 }
             }
         } else {
             typeText(cleanedText)
             historyManager.addRecord(
-                TranscriptionRecord(text: cleanedText, engine: engine, wasEnhanced: false)
+                TranscriptionRecord(
+                    text: cleanedText,
+                    engine: engine,
+                    wasEnhanced: false,
+                    speechDuration: speechDuration,
+                    source: source
+                )
             )
             overlayWindow.hide(state: overlayState)
             isSessionActive = false
@@ -731,6 +788,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         cmdDown?.post(tap: .cgAnnotatedSessionEventTap)
         cmdUp?.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    private func currentSourceApplication() -> TranscriptionSource? {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        let name = application.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedName = (name?.isEmpty == false ? name : nil) ?? "Unknown App"
+        return TranscriptionSource(
+            bundleIdentifier: application.bundleIdentifier,
+            name: resolvedName
+        )
     }
 
     @objc private func quit() {
