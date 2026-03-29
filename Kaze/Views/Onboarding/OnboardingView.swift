@@ -23,9 +23,15 @@ struct OnboardingView: View {
     @ObservedObject var qwenModelManager: FluidAudioModelManager
     @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
+    /// The hosting window, used to animate center-origin resize on step transitions.
+    weak var window: NSWindow?
+
     var onComplete: () -> Void
 
     private let totalSteps = 6
+
+    /// Whether we've expanded beyond the initial animated card size.
+    @State private var isExpanded = false
 
     private var selectedEngine: TranscriptionEngine {
         TranscriptionEngine(rawValue: engineRaw) ?? .parakeet
@@ -56,10 +62,15 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Content area
+            // Content area -- all steps live in the same view tree
             Group {
                 switch currentStep {
-                case 0: welcomeStep
+                case 0:
+                    animatedWelcomeStep
+                        .transition(.asymmetric(
+                            insertion: .opacity,
+                            removal: .scale(scale: 0.85, anchor: .center).combined(with: .opacity)
+                        ))
                 case 1: permissionsStep
                 case 2: hotkeyStep
                 case 3: engineStep
@@ -69,72 +80,77 @@ struct OnboardingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.25), value: currentStep)
+            .animation(.easeInOut(duration: 0.3), value: currentStep)
 
-            Divider()
+            // Navigation bar -- hidden during step 0
+            if isExpanded {
+                Divider()
 
-            // Navigation bar
-            HStack {
-                // Step indicators
-                HStack(spacing: 6) {
-                    ForEach(0..<totalSteps, id: \.self) { step in
-                        Circle()
-                            .fill(step == currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
-                            .frame(width: 6, height: 6)
-                    }
-                }
-
-                Spacer()
-
-                if currentStep > 0 && currentStep < totalSteps - 1 {
-                    Button("Back") {
-                        hotkeyRecorder.stop()
-                        if currentStep == 5 && !selectedEngine.requiresModelDownload {
-                            // Skipped model download step — go back to engine selection
-                            currentStep = 3
-                        } else {
-                            currentStep -= 1
+                HStack {
+                    // Step indicators
+                    HStack(spacing: 6) {
+                        ForEach(0..<totalSteps, id: \.self) { step in
+                            Circle()
+                                .fill(step == currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
+                                .frame(width: 6, height: 6)
                         }
                     }
-                    .controlSize(.regular)
-                }
 
-                if currentStep < totalSteps - 1 {
-                    Button("Continue") {
-                        hotkeyRecorder.stop()
-                        if currentStep == 2 {
-                            // Save hotkey before advancing
-                            hotkeyShortcut.saveToDefaults()
-                        }
-                        if currentStep == 3 {
-                            // Moving from engine step to model download step
-                            // If engine doesn't require download, skip model step
-                            if !selectedEngine.requiresModelDownload {
-                                currentStep = 5 // Skip to done
-                                return
+                    Spacer()
+
+                    if currentStep > 1 && currentStep < totalSteps - 1 {
+                        Button("Back") {
+                            hotkeyRecorder.stop()
+                            if currentStep == 5 && !selectedEngine.requiresModelDownload {
+                                currentStep = 3
+                            } else {
+                                currentStep -= 1
                             }
                         }
-                        currentStep += 1
+                        .controlSize(.regular)
                     }
-                    .keyboardShortcut(.return, modifiers: [])
-                    .controlSize(.regular)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(currentStep == 4 && isModelDownloading) // Can't advance during download
-                } else {
-                    Button("Get Started") {
-                        hotkeyShortcut.saveToDefaults()
-                        UserDefaults.standard.set(true, forKey: AppPreferenceKey.hasCompletedOnboarding)
-                        onComplete()
+
+                    if currentStep < totalSteps - 1 {
+                        Button("Continue") {
+                            hotkeyRecorder.stop()
+                            if currentStep == 2 {
+                                hotkeyShortcut.saveToDefaults()
+                            }
+                            if currentStep == 3 {
+                                if !selectedEngine.requiresModelDownload {
+                                    currentStep = 5
+                                    return
+                                }
+                            }
+                            currentStep += 1
+                        }
+                        .keyboardShortcut(.return, modifiers: [])
+                        .controlSize(.regular)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(currentStep == 4 && isModelDownloading)
+                    } else {
+                        Button("Get Started") {
+                            hotkeyShortcut.saveToDefaults()
+                            UserDefaults.standard.set(true, forKey: AppPreferenceKey.hasCompletedOnboarding)
+                            onComplete()
+                        }
+                        .keyboardShortcut(.return, modifiers: [])
+                        .controlSize(.regular)
+                        .buttonStyle(.borderedProminent)
                     }
-                    .keyboardShortcut(.return, modifiers: [])
-                    .controlSize(.regular)
-                    .buttonStyle(.borderedProminent)
                 }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 14)
         }
-        .frame(width: 480, height: 540)
+        .frame(
+            width: isExpanded ? 480 : 370,
+            height: isExpanded ? 540 : 450
+        )
+        .background(.windowBackground)
+        .clipShape(.rect(cornerRadius: 30))
+        .gesture(WindowDragGesture())
         .onAppear {
             hotkeyRecorder.onShortcutRecorded = { shortcut in
                 hotkeyShortcut = shortcut
@@ -143,6 +159,86 @@ struct OnboardingView: View {
         .onDisappear {
             hotkeyRecorder.stop()
             stopPermissionPolling()
+        }
+    }
+
+    /// Animates the NSWindow frame from its center so the expansion looks symmetric.
+    private func expandFromCenter() {
+        guard let window else {
+            withAnimation(.easeInOut(duration: 0.35)) {
+                isExpanded = true
+            }
+            return
+        }
+        let oldFrame = window.frame
+        let newSize = NSSize(width: 480, height: 540)
+        let newOrigin = NSPoint(
+            x: oldFrame.midX - newSize.width / 2,
+            y: oldFrame.midY - newSize.height / 2
+        )
+        let newFrame = NSRect(origin: newOrigin, size: newSize)
+        withAnimation(.easeInOut(duration: 0.35)) {
+            isExpanded = true
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.35
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            window.animator().setFrame(newFrame, display: true)
+        }
+    }
+
+    // MARK: - Step 0: Animated Welcome
+
+    private var animatedWelcomeStep: some View {
+        AnimatedOnboardingView(
+            foregroundColor: .white,
+            tint: .accentColor
+        ) { isAnimating in
+            if let icon = NSImage(named: "kaze-icon") {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 120, height: 120)
+                    .clipShape(.rect(cornerRadius: 24, style: .continuous))
+                    .scaleEffect(isAnimating ? 0.65 : 1)
+            } else {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 100))
+                    .foregroundStyle(.white)
+                    .blendMode(.softLight)
+                    .scaleEffect(isAnimating ? 0.5 : 1)
+            }
+        } content: { isAnimating in
+            VStack(spacing: 15) {
+                VStack(spacing: 6) {
+                    Text("Welcome to Kaze")
+                        .font(.title.bold())
+
+                    Text("Speech-to-text that runs entirely on your Mac.\nNo cloud, no subscription, no data leaves your device.")
+                        .font(.caption)
+                        .foregroundStyle(.gray)
+                        .multilineTextAlignment(.center)
+                }
+
+                Button {
+                    expandFromCenter()
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        currentStep = 1
+                    }
+                } label: {
+                    Text("Continue")
+                        .fontWeight(.medium)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: 230)
+                        .padding(.vertical, 12)
+                        .background(Color.accentColor.gradient, in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: [])
+            }
+            .padding(.top, 45)
+        } onClose: {
+            onComplete()
         }
     }
 
