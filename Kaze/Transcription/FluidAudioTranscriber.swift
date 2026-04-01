@@ -1,6 +1,5 @@
 import Foundation
 import AVFoundation
-import Accelerate
 import Combine
 import FluidAudio
 
@@ -8,35 +7,30 @@ import FluidAudio
 
 enum FluidAudioModel: String, CaseIterable, Identifiable {
     case parakeet
-    case qwen
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .parakeet: return "Parakeet TDT 0.6B v3"
-        case .qwen: return "Qwen3 ASR 0.6B"
         }
     }
 
     var sizeDescription: String {
         switch self {
         case .parakeet: return "~600 MB"
-        case .qwen: return "~2.5 GB"
         }
     }
 
     var qualityDescription: String {
         switch self {
         case .parakeet: return "Top-ranked accuracy, blazing fast. English only."
-        case .qwen: return "Fast multilingual transcription, 30+ languages."
         }
     }
 
     var provider: String {
         switch self {
         case .parakeet: return "NVIDIA"
-        case .qwen: return "Alibaba"
         }
     }
 
@@ -44,7 +38,6 @@ enum FluidAudioModel: String, CaseIterable, Identifiable {
     var repoId: String {
         switch self {
         case .parakeet: return "FluidInference/parakeet-tdt-0.6b-v3-coreml"
-        case .qwen: return "FluidInference/qwen3-asr-0.6b-coreml"
         }
     }
 
@@ -52,14 +45,13 @@ enum FluidAudioModel: String, CaseIterable, Identifiable {
     var repoSubfolder: String? {
         switch self {
         case .parakeet: return nil
-        case .qwen: return "f32"
         }
     }
 }
 
 // MARK: - FluidAudioModelManager
 
-/// Manages FluidAudio model download state for Parakeet and Qwen models.
+/// Manages FluidAudio model download state for the Parakeet model.
 @MainActor
 class FluidAudioModelManager: ObservableObject {
     enum ModelState: Equatable {
@@ -79,7 +71,6 @@ class FluidAudioModelManager: ObservableObject {
 
     // Loaded runtime objects
     private var parakeetManager: AsrManager?
-    private var qwen3Manager: Qwen3AsrManager?
     private var loadTask: Task<Void, any Error>?
     private var downloadTask: Task<Void, Never>?
 
@@ -93,8 +84,6 @@ class FluidAudioModelManager: ObservableObject {
         switch model {
         case .parakeet:
             return AsrModels.defaultCacheDirectory(for: .v3)
-        case .qwen:
-            return Qwen3AsrModels.defaultCacheDirectory()
         }
     }
 
@@ -109,15 +98,6 @@ class FluidAudioModelManager: ObservableObject {
                 state = .notDownloaded
                 modelSizeOnDiskCached = ""
             }
-        case .qwen:
-            let dir = Qwen3AsrModels.defaultCacheDirectory()
-            if Qwen3AsrModels.modelsExist(at: dir) {
-                state = .downloaded
-                refreshModelSizeOnDisk()
-            } else {
-                state = .notDownloaded
-                modelSizeOnDiskCached = ""
-            }
         }
     }
 
@@ -125,7 +105,6 @@ class FluidAudioModelManager: ObservableObject {
     private var estimatedDownloadBytes: UInt64 {
         switch model {
         case .parakeet: return 600_000_000  // ~600 MB
-        case .qwen: return 2_500_000_000    // ~2.5 GB
         }
     }
 
@@ -159,8 +138,6 @@ class FluidAudioModelManager: ObservableObject {
                 switch model {
                 case .parakeet:
                     try await AsrModels.download(version: .v3)
-                case .qwen:
-                    try await Qwen3AsrModels.download()
                 }
                 guard !Task.isCancelled else { return }
                 progressTask.cancel()
@@ -191,7 +168,7 @@ class FluidAudioModelManager: ObservableObject {
 
     /// Loads the model into memory, returning when ready for transcription.
     func loadModel() async throws {
-        if parakeetManager != nil || qwen3Manager != nil {
+        if parakeetManager != nil {
             state = .ready
             return
         }
@@ -212,12 +189,6 @@ class FluidAudioModelManager: ObservableObject {
                 let manager = AsrManager(config: .default)
                 try await manager.initialize(models: asrModels)
                 await MainActor.run { parakeetManager = manager }
-
-            case .qwen:
-                let dir = Qwen3AsrModels.defaultCacheDirectory()
-                let manager = Qwen3AsrManager()
-                try await manager.loadModels(from: dir)
-                await MainActor.run { qwen3Manager = manager }
             }
         }
         loadTask = task
@@ -242,56 +213,12 @@ class FluidAudioModelManager: ObservableObject {
             }
             let result = try await manager.transcribe(audioURL, source: .system)
             return normalizeTranscript(result.text)
-
-        case .qwen:
-            // Prefer the in-memory path; file-based is kept as a fallback.
-            guard let manager = qwen3Manager else {
-                throw FluidAudioTranscriberError.modelNotLoaded
-            }
-            let audioConverter = AudioConverter()
-            let audioSamples = try audioConverter.resampleAudioFile(audioURL)
-            let text = try await manager.transcribe(audioSamples: audioSamples)
-            return normalizeTranscript(text)
         }
-    }
-
-    /// Transcribes Qwen audio directly from in-memory float samples, avoiding temp file I/O.
-    func transcribeInMemory(samples: [Float], sampleRate: Double) async throws -> String {
-        guard model == .qwen else {
-            throw FluidAudioTranscriberError.modelNotLoaded
-        }
-        guard let manager = qwen3Manager else {
-            throw FluidAudioTranscriberError.modelNotLoaded
-        }
-
-        // Qwen expects 16kHz mono. Resample in-memory if needed.
-        let targetRate: Double = 16000
-        let audioSamples: [Float]
-        if abs(sampleRate - targetRate) > 1.0 {
-            audioSamples = Self.resampleForQwen(samples, from: sampleRate, to: targetRate)
-        } else {
-            audioSamples = samples
-        }
-
-        let text = try await manager.transcribe(audioSamples: audioSamples)
-        return normalizeTranscript(text)
-    }
-
-    /// Resamples audio using linear interpolation via Accelerate.
-    private nonisolated static func resampleForQwen(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
-        let ratio = targetSampleRate / sourceSampleRate
-        let outputLength = Int(Double(samples.count) * ratio)
-        guard outputLength > 0 else { return [] }
-        var output = [Float](repeating: 0, count: outputLength)
-        var control = (0..<outputLength).map { Float(Double($0) / ratio) }
-        vDSP_vlint(samples, &control, 1, &output, 1, vDSP_Length(outputLength), vDSP_Length(samples.count))
-        return output
     }
 
     /// Deletes the downloaded model files.
     func deleteModel() {
         parakeetManager = nil
-        qwen3Manager = nil
 
         let dir = modelDirectory
         try? FileManager.default.removeItem(at: dir)
@@ -304,7 +231,6 @@ class FluidAudioModelManager: ObservableObject {
         loadTask?.cancel()
         loadTask = nil
         parakeetManager = nil
-        qwen3Manager = nil
         switch state {
         case .ready, .loading:
             state = .downloaded
@@ -337,7 +263,7 @@ class FluidAudioModelManager: ObservableObject {
 
     /// Whether a loaded runtime instance is available.
     var isLoaded: Bool {
-        parakeetManager != nil || qwen3Manager != nil
+        parakeetManager != nil
     }
 
     /// Whether the downloaded model can currently be used for transcription.
@@ -380,7 +306,7 @@ enum FluidAudioTranscriberError: LocalizedError {
 
 // MARK: - FluidAudioTranscriber
 
-/// Transcriber that uses FluidAudio (Parakeet or Qwen) for speech recognition.
+/// Transcriber that uses FluidAudio (Parakeet) for speech recognition.
 /// Records audio into a buffer while the hotkey is held, writes to a temp WAV file,
 /// then transcribes on release.
 @MainActor
@@ -499,16 +425,9 @@ class FluidAudioTranscriber: ObservableObject, TranscriberProtocol {
             try await modelManager.loadModel()
             guard !Task.isCancelled else { return }
 
-            let text: String
-            if model == .qwen {
-                // Qwen path: pass samples directly in-memory, avoiding temp file I/O.
-                text = try await modelManager.transcribeInMemory(samples: samples, sampleRate: sampleRate)
-            } else {
-                // Parakeet path: requires a file URL.
-                let tempURL = try writeWAVFile(samples: samples, sampleRate: sampleRate)
-                defer { try? FileManager.default.removeItem(at: tempURL) }
-                text = try await modelManager.transcribe(audioURL: tempURL)
-            }
+            let tempURL = try writeWAVFile(samples: samples, sampleRate: sampleRate)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
+            let text = try await modelManager.transcribe(audioURL: tempURL)
             guard !Task.isCancelled else { return }
 
             transcribedText = text

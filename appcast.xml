@@ -70,7 +70,7 @@
         <h2>What's New in 0.76</h2>
         <ul>
           <li>Redesigned onboarding with permissions step, model downloads, and brand icons</li>
-          <li>Reordered engines: Parakeet first (recommended/default), then Whisper, Qwen, Dictation</li>
+          <li>Reordered engines: Parakeet first (recommended/default), then Whisper, Dictation</li>
           <li>Real download progress bars for all engine models during onboarding</li>
           <li>Fixed settings and about windows not appearing for accessory apps</li>
         </ul>

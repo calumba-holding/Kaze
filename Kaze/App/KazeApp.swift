@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import FluidAudio
 
 @main
 struct KazeApp: App {
@@ -11,7 +12,6 @@ struct KazeApp: App {
             ContentView(
                 whisperModelManager: appDelegate.whisperModelManager,
                 parakeetModelManager: appDelegate.parakeetModelManager,
-                qwenModelManager: appDelegate.qwenModelManager,
                 historyManager: appDelegate.historyManager,
                 customWordsManager: appDelegate.customWordsManager,
                 updaterManager: appDelegate.updaterManager,
@@ -31,7 +31,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var fluidAudioTranscriber: FluidAudioTranscriber?
     let whisperModelManager = WhisperModelManager()
     let parakeetModelManager = FluidAudioModelManager(model: .parakeet)
-    let qwenModelManager = FluidAudioModelManager(model: .qwen)
     let historyManager = TranscriptionHistoryManager()
     let customWordsManager = CustomWordsManager()
 
@@ -101,7 +100,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var observedEngineForPreferenceChanges: TranscriptionEngine?
     private var lastWhisperModelState: WhisperModelManager.ModelState = .notDownloaded
     private var lastParakeetModelState: FluidAudioModelManager.ModelState = .notDownloaded
-    private var lastQwenModelState: FluidAudioModelManager.ModelState = .notDownloaded
     private static let modelUnloadIdleDelay: Duration = .seconds(90)
 
     /// Captures all settings at the moment recording begins so that mid-session
@@ -134,8 +132,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return whisperTranscriber
         case .parakeet:
             return getOrCreateFluidAudioTranscriber(model: .parakeet, manager: parakeetModelManager)
-        case .qwen:
-            return getOrCreateFluidAudioTranscriber(model: .qwen, manager: qwenModelManager)
         }
     }
 
@@ -199,6 +195,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let storedMicrophone = defaults.string(forKey: AppPreferenceKey.selectedMicrophoneID) ?? ""
         if !storedMicrophone.isEmpty, !isKnownAudioInputDevice(storedMicrophone) {
             defaults.set("", forKey: AppPreferenceKey.selectedMicrophoneID)
+        }
+
+        if defaults.string(forKey: AppPreferenceKey.transcriptionEngine) == "qwen" {
+            defaults.set(TranscriptionEngine.parakeet.rawValue, forKey: AppPreferenceKey.transcriptionEngine)
+        }
+
+        let legacyQwenDirectory = Qwen3AsrModels.defaultCacheDirectory()
+        if FileManager.default.fileExists(atPath: legacyQwenDirectory.path) {
+            try? FileManager.default.removeItem(at: legacyQwenDirectory)
         }
     }
 
@@ -278,7 +283,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func observeModelState() {
         lastWhisperModelState = whisperModelManager.state
         lastParakeetModelState = parakeetModelManager.state
-        lastQwenModelState = qwenModelManager.state
 
         whisperModelManager.$state
             .receive(on: RunLoop.main)
@@ -310,21 +314,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
             .store(in: &cancellables)
 
-        qwenModelManager.$state
-            .receive(on: RunLoop.main)
-            .sink { [weak self] newState in
-                guard let self else { return }
-                let previousState = self.lastQwenModelState
-                self.lastQwenModelState = newState
-                self.updateStatusItemIndicator()
-                self.updateOverlayProcessingStatusIfNeeded()
-                if self.didCompleteFluidAudioDownload(for: .qwen, from: previousState, to: newState) {
-                    self.cancelModelWarmup()
-                    self.warmupSelectedEngineRuntimeIfNeeded()
-                }
-            }
-            .store(in: &cancellables)
-
         whisperModelManager.$selectedVariant
             .dropFirst()
             .receive(on: RunLoop.main)
@@ -340,7 +329,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func updateStatusItemIndicator() {
         guard let statusItem, let button = statusItem.button else { return }
-        let runtimesLoaded = whisperModelManager.isLoaded || parakeetModelManager.isLoaded || qwenModelManager.isLoaded
+        let runtimesLoaded = whisperModelManager.isLoaded || parakeetModelManager.isLoaded
         let shouldMuteIcon = !isSessionActive && !runtimesLoaded
 
         statusItem.length = NSStatusItem.squareLength
@@ -370,7 +359,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var onboardingView = OnboardingView(
             whisperModelManager: whisperModelManager,
             parakeetModelManager: parakeetModelManager,
-            qwenModelManager: qwenModelManager,
             window: window
         ) { [weak self] in
             self?.onboardingWindowController?.window?.close()
@@ -447,7 +435,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let contentView = ContentView(
                 whisperModelManager: self.whisperModelManager,
                 parakeetModelManager: self.parakeetModelManager,
-                qwenModelManager: self.qwenModelManager,
                 historyManager: self.historyManager,
                 customWordsManager: self.customWordsManager,
                 updaterManager: self.updaterManager,
@@ -567,8 +554,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Check if the selected engine's model is available
         if preferredEngine.requiresModelDownload && !preferredEngine.isModelReady(
             whisperManager: whisperModelManager,
-            parakeetManager: parakeetModelManager,
-            qwenManager: qwenModelManager
+            parakeetManager: parakeetModelManager
         ) {
             print("\(preferredEngine.title) model not ready, falling back to Direct Dictation")
             engine = .dictation
@@ -586,8 +572,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Use the appropriate transcriber
         if engine == .whisper, engine.isModelReady(
             whisperManager: whisperModelManager,
-            parakeetManager: parakeetModelManager,
-            qwenManager: qwenModelManager
+            parakeetManager: parakeetModelManager
         ) {
             let whisper = whisperTranscriber ?? WhisperTranscriber(modelManager: whisperModelManager)
             whisperTranscriber = whisper
@@ -607,14 +592,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayState.bind(to: whisper)
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             whisper.startRecording()
-        } else if (engine == .parakeet || engine == .qwen), engine.isModelReady(
+        } else if engine == .parakeet, engine.isModelReady(
             whisperManager: whisperModelManager,
-            parakeetManager: parakeetModelManager,
-            qwenManager: qwenModelManager
+            parakeetManager: parakeetModelManager
         ) {
-            let manager = engine == .parakeet ? parakeetModelManager : qwenModelManager
-            let model: FluidAudioModel = engine == .parakeet ? .parakeet : .qwen
-            let transcriber = getOrCreateFluidAudioTranscriber(model: model, manager: manager)
+            let transcriber = getOrCreateFluidAudioTranscriber(model: .parakeet, manager: parakeetModelManager)
             transcriber.selectedDeviceUID = micUID
             transcriber.onTranscriptionFinished = { [weak self] (text: String) in
                 guard let self else { return }
@@ -662,7 +644,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // until onTranscriptionFinished fires via processTranscription
             overlayState.isEnhancing = true // Show processing state while Whisper works
             overlayState.processingStatusText = processingStatusText(for: .whisper)
-        } else if engine == .parakeet || engine == .qwen {
+        } else if engine == .parakeet {
             (session.transcriber as? FluidAudioTranscriber)?.stopRecording()
             // FluidAudio models also transcribe after stop
             overlayState.isEnhancing = true
@@ -801,8 +783,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return processingStatusText(for: whisperModelManager.state)
         case .parakeet:
             return processingStatusText(for: parakeetModelManager.state)
-        case .qwen:
-            return processingStatusText(for: qwenModelManager.state)
         }
     }
 
@@ -893,26 +873,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     print("Parakeet warm-up failed: \(error)")
                 }
             }
-
-        case .qwen:
-            guard case .downloaded = qwenModelManager.state else {
-                modelWarmupGeneration = nil
-                return
-            }
-            modelWarmupTask = Task(priority: .utility) { [weak self] in
-                guard let self else { return }
-                defer { self.finishModelWarmup(generation: generation) }
-                do {
-                    try await self.qwenModelManager.loadModel()
-                    if !self.isSessionActive {
-                        self.scheduleIdleModelUnload()
-                    }
-                } catch is CancellationError {
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    print("Qwen warm-up failed: \(error)")
-                }
-            }
         }
     }
 
@@ -976,7 +936,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func unloadModelRuntimesFromMemory() {
         whisperModelManager.unloadModelFromMemory()
         parakeetModelManager.unloadModelFromMemory()
-        qwenModelManager.unloadModelFromMemory()
         whisperTranscriber = nil
         fluidAudioTranscriber = nil
         updateStatusItemIndicator()
@@ -990,7 +949,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             switch transcriptionEngine {
             case .whisper:
                 whisperTranscriber?.isEnhancing = enhancing
-            case .parakeet, .qwen:
+            case .parakeet:
                 fluidAudioTranscriber?.isEnhancing = enhancing
             case .dictation:
                 speechTranscriber.isEnhancing = enhancing

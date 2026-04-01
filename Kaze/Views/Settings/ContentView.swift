@@ -42,7 +42,6 @@ private enum SettingsTab: String, CaseIterable {
 struct ContentView: View {
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
-    @ObservedObject var qwenModelManager: FluidAudioModelManager
     @ObservedObject var historyManager: TranscriptionHistoryManager
     @ObservedObject var customWordsManager: CustomWordsManager
     @ObservedObject var updaterManager: UpdaterManager
@@ -63,8 +62,7 @@ struct ContentView: View {
                 case .general:
                     GeneralSettingsView(
                         whisperModelManager: whisperModelManager,
-                        parakeetModelManager: parakeetModelManager,
-                        qwenModelManager: qwenModelManager
+                        parakeetModelManager: parakeetModelManager
                     )
                 case .controls:
                     ControlsSettingsView(updaterManager: updaterManager)
@@ -129,7 +127,6 @@ private struct GeneralSettingsView: View {
 
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
-    @ObservedObject var qwenModelManager: FluidAudioModelManager
 
     private var selectedEngine: TranscriptionEngine {
         TranscriptionEngine(rawValue: engineRaw) ?? .dictation
@@ -199,10 +196,6 @@ private struct GeneralSettingsView: View {
 
                     if selectedEngine == .parakeet {
                         fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
-                    }
-
-                    if selectedEngine == .qwen {
-                        fluidAudioModelStatusRow(manager: qwenModelManager, model: .qwen)
                     }
                 }
             }
@@ -473,7 +466,7 @@ private struct GeneralSettingsView: View {
         whisperModelManager.isBusy
     }
 
-    // MARK: - FluidAudio Model Status (Parakeet / Qwen)
+    // MARK: - FluidAudio Model Status
 
     @ViewBuilder
     private func fluidAudioModelStatusRow(manager: FluidAudioModelManager, model: FluidAudioModel) -> some View {
@@ -1152,11 +1145,6 @@ private struct HistorySettingsView: View {
                 .aspectRatio(contentMode: .fit)
         case "parakeet":
             Image("nvidia-icon")
-                .renderingMode(.template)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-        case "qwen":
-            Image("qwen-icon")
                 .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)

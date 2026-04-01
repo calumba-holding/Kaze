@@ -5,9 +5,8 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
     case dictation
     case whisper
     case parakeet
-    case qwen
 
-    static let onboardingOrder: [Self] = [.parakeet, .whisper, .qwen, .dictation]
+    static let onboardingOrder: [Self] = [.parakeet, .whisper, .dictation]
 
     var id: String { rawValue }
 
@@ -16,7 +15,6 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .dictation: return "Direct Dictation"
         case .whisper: return "Whisper (OpenAI)"
         case .parakeet: return "Parakeet v3 (NVIDIA)"
-        case .qwen: return "Qwen3 ASR (Alibaba)"
         }
     }
 
@@ -25,7 +23,6 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .dictation: return "Uses Apple's built-in speech recognition. Works immediately with no setup."
         case .whisper: return "Uses OpenAI's Whisper model running locally on your Mac. Requires a one-time download."
         case .parakeet: return "NVIDIA's Parakeet TDT 0.6B v3 via CoreML. Top-ranked accuracy, blazing fast. English only."
-        case .qwen: return "Alibaba's Qwen3 ASR 0.6B via CoreML. Fast multilingual transcription with 30+ languages."
         }
     }
 
@@ -35,8 +32,6 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return "Best accuracy, blazing fast. English only. ~600 MB download."
         case .whisper:
             return "OpenAI's Whisper running locally. Multiple sizes available."
-        case .qwen:
-            return "Fast multilingual (30+ languages). ~2.5 GB download."
         case .dictation:
             return "Apple's built-in speech recognition. No download required."
         }
@@ -46,15 +41,14 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .dictation:
             return false
-        case .whisper, .parakeet, .qwen:
+        case .whisper, .parakeet:
             return true
         }
     }
 
     func isModelReady(
         whisperManager: WhisperModelManager,
-        parakeetManager: FluidAudioModelManager,
-        qwenManager: FluidAudioModelManager
+        parakeetManager: FluidAudioModelManager
     ) -> Bool {
         switch self {
         case .dictation:
@@ -63,15 +57,12 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return whisperManager.isAvailableForTranscription
         case .parakeet:
             return parakeetManager.isAvailableForTranscription
-        case .qwen:
-            return qwenManager.isAvailableForTranscription
         }
     }
 
     func isModelDownloading(
         whisperManager: WhisperModelManager,
-        parakeetManager: FluidAudioModelManager,
-        qwenManager: FluidAudioModelManager
+        parakeetManager: FluidAudioModelManager
     ) -> Bool {
         switch self {
         case .dictation:
@@ -80,8 +71,6 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
             return whisperManager.isDownloading
         case .parakeet:
             return parakeetManager.isDownloading
-        case .qwen:
-            return qwenManager.isDownloading
         }
     }
 }

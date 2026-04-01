@@ -30,7 +30,6 @@ Kaze ships with **4 fully on-device transcription engines**:
 | **Direct Dictation** | Apple `SFSpeechRecognizer` | Zero setup, real-time streaming, uses device locale |
 | **Whisper (OpenAI)** | [WhisperKit](https://github.com/argmaxinc/WhisperKit) | Local model variants: Tiny, Base, Small, Large v3 Turbo |
 | **Parakeet v3 (NVIDIA)** | [FluidAudio](https://github.com/FluidInference/FluidAudio) | Fast, high-accuracy English ASR (~600 MB CoreML model) |
-| **Qwen3 ASR (Alibaba)** | [FluidAudio](https://github.com/FluidInference/FluidAudio) | Multilingual ASR, 30+ languages (~2.5 GB CoreML model) |
 
 ### Model management
 
@@ -89,7 +88,7 @@ Kaze ships with **4 fully on-device transcription engines**:
 | UI | **SwiftUI** + **AppKit** -- SwiftUI for Settings/Onboarding/Overlay views; AppKit for menu bar, floating panel, clipboard, and simulated key events |
 | Speech | **Apple Speech framework** (`SFSpeechRecognizer`) for real-time streaming dictation |
 | Whisper | [**WhisperKit**](https://github.com/argmaxinc/WhisperKit) for local OpenAI Whisper transcription |
-| Parakeet / Qwen | [**FluidAudio**](https://github.com/FluidInference/FluidAudio) for Parakeet v3 and Qwen3 ASR CoreML runtimes |
+| Parakeet | [**FluidAudio**](https://github.com/FluidInference/FluidAudio) for Parakeet v3 CoreML runtime |
 | Enhancement | **Foundation Models** (Apple Intelligence on-device LLM) for text cleanup |
 | Hotkey | **CGEvent** tap for low-level global hotkey detection |
 | Audio | **AVCaptureSession** + **Accelerate/vDSP** for microphone capture, format conversion, and resampling |

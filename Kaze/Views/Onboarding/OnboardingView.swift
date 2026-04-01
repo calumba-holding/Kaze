@@ -20,7 +20,6 @@ struct OnboardingView: View {
     // Model managers
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
-    @ObservedObject var qwenModelManager: FluidAudioModelManager
     @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
     /// The hosting window, used to animate center-origin resize on step transitions.
@@ -46,8 +45,7 @@ struct OnboardingView: View {
     private var isModelDownloading: Bool {
         selectedEngine.isModelDownloading(
             whisperManager: whisperModelManager,
-            parakeetManager: parakeetModelManager,
-            qwenManager: qwenModelManager
+            parakeetManager: parakeetModelManager
         )
     }
 
@@ -55,8 +53,7 @@ struct OnboardingView: View {
     private var isModelReady: Bool {
         selectedEngine.isModelReady(
             whisperManager: whisperModelManager,
-            parakeetManager: parakeetModelManager,
-            qwenManager: qwenModelManager
+            parakeetManager: parakeetModelManager
         )
     }
 
@@ -598,8 +595,6 @@ struct OnboardingView: View {
             onboardingWhisperStatus
         case .parakeet:
             onboardingFluidAudioStatus(manager: parakeetModelManager, model: .parakeet)
-        case .qwen:
-            onboardingFluidAudioStatus(manager: qwenModelManager, model: .qwen)
         default:
             Text("No download required.")
                 .font(.caption)
@@ -759,12 +754,6 @@ struct OnboardingView: View {
                 .frame(width: 16, height: 16)
         case .parakeet:
             Image("nvidia-icon")
-                .renderingMode(.template)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 16, height: 16)
-        case .qwen:
-            Image("qwen-icon")
                 .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
