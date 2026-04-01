@@ -635,10 +635,18 @@ struct OnboardingView: View {
                 .controlSize(.small)
             }
 
-        case .downloaded, .ready, .loading:
+        case .downloaded, .ready:
             Label("Model downloaded", systemImage: "checkmark.circle.fill")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.green)
+
+        case .loading:
+            VStack(spacing: 8) {
+                ProgressView()
+                Text("Warming up model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
         case .error(let message):
             VStack(spacing: 8) {
@@ -682,10 +690,18 @@ struct OnboardingView: View {
                 .controlSize(.small)
             }
 
-        case .downloaded, .ready, .loading:
+        case .downloaded, .ready:
             Label("Model downloaded", systemImage: "checkmark.circle.fill")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.green)
+
+        case .loading:
+            VStack(spacing: 8) {
+                ProgressView()
+                Text("Warming up model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
         case .error(let message):
             VStack(spacing: 8) {

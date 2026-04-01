@@ -96,7 +96,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hotkeyModeObserver: NSObjectProtocol?
     private var isSessionActive = false
     private var idleModelUnloadTask: Task<Void, Never>?
+    private var modelWarmupTask: Task<Void, Never>?
+    private var modelWarmupGeneration: UUID?
     private var observedEngineForPreferenceChanges: TranscriptionEngine?
+    private var lastWhisperModelState: WhisperModelManager.ModelState = .notDownloaded
+    private var lastParakeetModelState: FluidAudioModelManager.ModelState = .notDownloaded
+    private var lastQwenModelState: FluidAudioModelManager.ModelState = .notDownloaded
     private static let modelUnloadIdleDelay: Duration = .seconds(90)
 
     /// Captures all settings at the moment recording begins so that mid-session
@@ -167,6 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         observedEngineForPreferenceChanges = transcriptionEngine
         observeModelState()
         updateStatusItemIndicator()
+        warmupSelectedEngineRuntimeIfNeeded()
 
         // Start Sparkle updater (safe to call before permissions; it only
         // fetches the appcast over the network and never touches the mic).
@@ -241,49 +247,94 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var aboutWindowController: NSWindowController?
 
     @objc private func showAbout() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        presentManagedWindow {
+            if let window = self.aboutWindowController?.window {
+                self.bringWindowToFront(window)
+                return
+            }
 
-        if let window = aboutWindowController?.window {
-            window.makeKeyAndOrderFront(nil)
-            return
+            let aboutView = AboutView()
+            let hostingController = NSHostingController(rootView: aboutView)
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 310),
+                styleMask: [.titled, .closable],
+                backing: .buffered,
+                defer: false
+            )
+            window.center()
+            window.title = "About Kaze"
+            window.contentViewController = hostingController
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+
+            let controller = NSWindowController(window: window)
+            self.aboutWindowController = controller
+            controller.showWindow(nil)
+            self.bringWindowToFront(window)
         }
-
-        let aboutView = AboutView()
-        let hostingController = NSHostingController(rootView: aboutView)
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 310),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.center()
-        window.title = "About Kaze"
-        window.contentViewController = hostingController
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-
-        let controller = NSWindowController(window: window)
-        aboutWindowController = controller
-        controller.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
     }
 
     private func observeModelState() {
+        lastWhisperModelState = whisperModelManager.state
+        lastParakeetModelState = parakeetModelManager.state
+        lastQwenModelState = qwenModelManager.state
+
         whisperModelManager.$state
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateStatusItemIndicator() }
+            .sink { [weak self] newState in
+                guard let self else { return }
+                let previousState = self.lastWhisperModelState
+                self.lastWhisperModelState = newState
+                self.updateStatusItemIndicator()
+                self.updateOverlayProcessingStatusIfNeeded()
+                if self.didCompleteWhisperDownload(from: previousState, to: newState) {
+                    self.cancelModelWarmup()
+                    self.warmupSelectedEngineRuntimeIfNeeded()
+                }
+            }
             .store(in: &cancellables)
 
         parakeetModelManager.$state
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateStatusItemIndicator() }
+            .sink { [weak self] newState in
+                guard let self else { return }
+                let previousState = self.lastParakeetModelState
+                self.lastParakeetModelState = newState
+                self.updateStatusItemIndicator()
+                self.updateOverlayProcessingStatusIfNeeded()
+                if self.didCompleteFluidAudioDownload(for: .parakeet, from: previousState, to: newState) {
+                    self.cancelModelWarmup()
+                    self.warmupSelectedEngineRuntimeIfNeeded()
+                }
+            }
             .store(in: &cancellables)
 
         qwenModelManager.$state
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateStatusItemIndicator() }
+            .sink { [weak self] newState in
+                guard let self else { return }
+                let previousState = self.lastQwenModelState
+                self.lastQwenModelState = newState
+                self.updateStatusItemIndicator()
+                self.updateOverlayProcessingStatusIfNeeded()
+                if self.didCompleteFluidAudioDownload(for: .qwen, from: previousState, to: newState) {
+                    self.cancelModelWarmup()
+                    self.warmupSelectedEngineRuntimeIfNeeded()
+                }
+            }
+            .store(in: &cancellables)
+
+        whisperModelManager.$selectedVariant
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.cancelModelWarmup()
+                self.scheduleIdleModelUnload()
+                self.updateOverlayProcessingStatusIfNeeded()
+                self.warmupSelectedEngineRuntimeIfNeeded()
+            }
             .store(in: &cancellables)
     }
 
@@ -380,50 +431,62 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func checkForUpdates() {
-        NSApp.activate(ignoringOtherApps: true)
-        updaterManager.checkForUpdates()
+        presentManagedWindow {
+            self.updaterManager.checkForUpdates()
+        }
     }
 
     @objc private func openSettings() {
-        // Temporarily become a regular app so the window can receive focus
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        presentManagedWindow {
+            if let window = self.settingsWindowController?.window {
+                self.settingsWindowController?.showWindow(nil)
+                self.bringWindowToFront(window)
+                return
+            }
 
-        if let window = settingsWindowController?.window {
-            settingsWindowController?.showWindow(nil)
-            window.makeKeyAndOrderFront(nil)
-            return
+            let contentView = ContentView(
+                whisperModelManager: self.whisperModelManager,
+                parakeetModelManager: self.parakeetModelManager,
+                qwenModelManager: self.qwenModelManager,
+                historyManager: self.historyManager,
+                customWordsManager: self.customWordsManager,
+                updaterManager: self.updaterManager,
+                restartOnboarding: self.restartOnboarding
+            )
+            .frame(width: 520, height: 600)
+            let hostingController = NSHostingController(rootView: contentView)
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.minSize = NSSize(width: 500, height: 800)
+            window.maxSize = NSSize(width: 500, height: 800)
+            window.center()
+            window.title = "Kaze Settings"
+            window.contentViewController = hostingController
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+
+            let controller = NSWindowController(window: window)
+            self.settingsWindowController = controller
+            controller.showWindow(nil)
+            self.bringWindowToFront(window)
         }
+    }
 
-        let contentView = ContentView(
-            whisperModelManager: whisperModelManager,
-            parakeetModelManager: parakeetModelManager,
-            qwenModelManager: qwenModelManager,
-            historyManager: historyManager,
-            customWordsManager: customWordsManager,
-            updaterManager: updaterManager,
-            restartOnboarding: restartOnboarding
-        )
-        .frame(width: 520, height: 600)
-        let hostingController = NSHostingController(rootView: contentView)
+    private func presentManagedWindow(_ action: @escaping () -> Void) {
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            action()
+        }
+    }
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.minSize = NSSize(width: 500, height: 800)
-        window.maxSize = NSSize(width: 500, height: 800)
-        window.center()
-        window.title = "Kaze Settings"
-        window.contentViewController = hostingController
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-
-        let controller = NSWindowController(window: window)
-        settingsWindowController = controller
-        controller.showWindow(nil)
+    private func bringWindowToFront(_ window: NSWindow) {
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -492,6 +555,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !isSessionActive else { return }
         idleModelUnloadTask?.cancel()
         idleModelUnloadTask = nil
+        overlayState.processingStatusText = ""
 
         // Capture engine and enhancement mode at session start so that mid-session
         // preference changes cannot route stop/finalize through the wrong engine.
@@ -597,10 +661,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // For Whisper, transcription happens after stop — the overlay stays visible
             // until onTranscriptionFinished fires via processTranscription
             overlayState.isEnhancing = true // Show processing state while Whisper works
+            overlayState.processingStatusText = processingStatusText(for: .whisper)
         } else if engine == .parakeet || engine == .qwen {
             (session.transcriber as? FluidAudioTranscriber)?.stopRecording()
             // FluidAudio models also transcribe after stop
             overlayState.isEnhancing = true
+            overlayState.processingStatusText = processingStatusText(for: engine)
         } else {
             (session.transcriber as? SpeechTranscriber)?.stopRecording()
             let waitingForAI = session.enhancementMode == .appleIntelligence && enhancer != nil
@@ -621,6 +687,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let session = activeSession
 
         // Clear the "processing" state from Whisper
+        overlayState.processingStatusText = ""
         overlayState.isEnhancing = false
 
         // Optionally strip filler words (uh, um, er, hmm, etc.) before any further processing.
@@ -648,9 +715,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Only apply AI enhancement for Direct Dictation — AI models already produce enhanced output.
         if enhancement == .appleIntelligence, engine == .dictation, let enhancer {
             overlayState.isEnhancing = true
+            overlayState.processingStatusText = "Enhancing text..."
             setEnhancingState(true, session: session)
             Task {
                 defer {
+                    self.overlayState.processingStatusText = ""
                     self.overlayState.isEnhancing = false
                     self.setEnhancingState(false, session: session)
                     self.overlayWindow.hide(state: self.overlayState)
@@ -724,6 +793,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func processingStatusText(for engine: TranscriptionEngine) -> String {
+        switch engine {
+        case .dictation:
+            return "Enhancing text..."
+        case .whisper:
+            return processingStatusText(for: whisperModelManager.state)
+        case .parakeet:
+            return processingStatusText(for: parakeetModelManager.state)
+        case .qwen:
+            return processingStatusText(for: qwenModelManager.state)
+        }
+    }
+
+    private func processingStatusText(for state: WhisperModelManager.ModelState) -> String {
+        switch state {
+        case .loading:
+            return "Warming up model..."
+        default:
+            return "Transcribing..."
+        }
+    }
+
+    private func processingStatusText(for state: FluidAudioModelManager.ModelState) -> String {
+        switch state {
+        case .loading:
+            return "Warming up model..."
+        default:
+            return "Transcribing..."
+        }
+    }
+
+    private func updateOverlayProcessingStatusIfNeeded() {
+        guard overlayState.isEnhancing, let engine = activeSession?.engine else { return }
+        overlayState.processingStatusText = processingStatusText(for: engine)
+    }
+
     private func handleEnginePreferenceChange() {
         let currentEngine = transcriptionEngine
         if observedEngineForPreferenceChanges == nil {
@@ -731,8 +836,125 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         guard observedEngineForPreferenceChanges != currentEngine else { return }
         observedEngineForPreferenceChanges = currentEngine
+        cancelModelWarmup()
         guard !isSessionActive else { return }
         scheduleIdleModelUnload()
+        warmupSelectedEngineRuntimeIfNeeded()
+    }
+
+    private func warmupSelectedEngineRuntimeIfNeeded() {
+        guard !isSessionActive else { return }
+        guard modelWarmupTask == nil else { return }
+
+        let generation = UUID()
+        modelWarmupGeneration = generation
+
+        switch transcriptionEngine {
+        case .dictation:
+            modelWarmupGeneration = nil
+            return
+
+        case .whisper:
+            guard case .downloaded = whisperModelManager.state else {
+                modelWarmupGeneration = nil
+                return
+            }
+            modelWarmupTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                defer { self.finishModelWarmup(generation: generation) }
+                do {
+                    _ = try await self.whisperModelManager.loadModel()
+                    if !self.isSessionActive {
+                        self.scheduleIdleModelUnload()
+                    }
+                } catch is CancellationError {
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    print("Whisper warm-up failed: \(error)")
+                }
+            }
+
+        case .parakeet:
+            guard case .downloaded = parakeetModelManager.state else {
+                modelWarmupGeneration = nil
+                return
+            }
+            modelWarmupTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                defer { self.finishModelWarmup(generation: generation) }
+                do {
+                    try await self.parakeetModelManager.loadModel()
+                    if !self.isSessionActive {
+                        self.scheduleIdleModelUnload()
+                    }
+                } catch is CancellationError {
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    print("Parakeet warm-up failed: \(error)")
+                }
+            }
+
+        case .qwen:
+            guard case .downloaded = qwenModelManager.state else {
+                modelWarmupGeneration = nil
+                return
+            }
+            modelWarmupTask = Task(priority: .utility) { [weak self] in
+                guard let self else { return }
+                defer { self.finishModelWarmup(generation: generation) }
+                do {
+                    try await self.qwenModelManager.loadModel()
+                    if !self.isSessionActive {
+                        self.scheduleIdleModelUnload()
+                    }
+                } catch is CancellationError {
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    print("Qwen warm-up failed: \(error)")
+                }
+            }
+        }
+    }
+
+    private func cancelModelWarmup() {
+        modelWarmupTask?.cancel()
+        modelWarmupTask = nil
+        modelWarmupGeneration = nil
+    }
+
+    private func finishModelWarmup(generation: UUID) {
+        guard modelWarmupGeneration == generation else { return }
+        modelWarmupTask = nil
+        modelWarmupGeneration = nil
+    }
+
+    private func didCompleteWhisperDownload(
+        from previous: WhisperModelManager.ModelState,
+        to current: WhisperModelManager.ModelState
+    ) -> Bool {
+        guard transcriptionEngine == .whisper else { return false }
+        guard case .downloaded = current else { return false }
+        switch previous {
+        case .notDownloaded, .downloading, .error:
+            return true
+        case .downloaded, .loading, .ready:
+            return false
+        }
+    }
+
+    private func didCompleteFluidAudioDownload(
+        for engine: TranscriptionEngine,
+        from previous: FluidAudioModelManager.ModelState,
+        to current: FluidAudioModelManager.ModelState
+    ) -> Bool {
+        guard transcriptionEngine == engine else { return false }
+        guard case .downloaded = current else { return false }
+        switch previous {
+        case .notDownloaded, .downloading, .error:
+            return true
+        case .downloaded, .loading, .ready:
+            return false
+        }
     }
 
     private func scheduleIdleModelUnload() {
@@ -809,12 +1031,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func quit() {
+        cancelModelWarmup()
         hotkeyManager.stop()
         NSApp.terminate(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         idleModelUnloadTask?.cancel()
+        cancelModelWarmup()
         hotkeyManager.stop()
         cancellables.removeAll()
         if let hotkeyModeObserver {

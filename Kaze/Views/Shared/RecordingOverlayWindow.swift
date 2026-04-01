@@ -9,6 +9,7 @@ class OverlayState: ObservableObject {
     @Published var audioLevel: Float = 0.0
     @Published var transcribedText = ""
     @Published var isEnhancing = false
+    @Published var processingStatusText = ""
     @Published var isVisible = false
 
     private var cancellables = Set<AnyCancellable>()
@@ -52,6 +53,7 @@ class OverlayState: ObservableObject {
         audioLevel = 0
         transcribedText = ""
         isEnhancing = false
+        processingStatusText = ""
         isVisible = false
         cancellables.removeAll()
     }
@@ -142,6 +144,7 @@ class RecordingOverlayWindow: NSPanel {
             // Step 1: Clear text and collapse to compact shape
             state.transcribedText = ""
             state.isEnhancing = false
+            state.processingStatusText = ""
             state.isRecording = false
 
             // Step 2: After compact transition settles, shrink width to zero
@@ -178,6 +181,7 @@ private struct OverlayContent: View {
             isRecording: state.isRecording,
             transcribedText: state.transcribedText,
             isEnhancing: state.isEnhancing,
+            processingStatusText: state.processingStatusText,
             notchMode: notchMode,
             notchVisible: state.isVisible
         )

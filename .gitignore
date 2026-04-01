@@ -15,6 +15,9 @@ xcschememanagement.plist
 .build/
 Packages/
 
+# Local package overrides (patched dependencies)
+LocalPackages/
+
 # Misc
 *.moved-aside
 *.pbxuser

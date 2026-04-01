@@ -76,6 +76,8 @@ class WhisperModelManager: ObservableObject {
             guard oldValue != selectedVariant else { return }
             UserDefaults.standard.set(selectedVariant.rawValue, forKey: AppPreferenceKey.whisperModelVariant)
             // When switching variants, invalidate the current WhisperKit instance
+            loadTask?.cancel()
+            loadTask = nil
             whisperKit = nil
             checkExistingModel()
         }
@@ -91,7 +93,11 @@ class WhisperModelManager: ObservableObject {
 
     /// Per-variant download directory to avoid collisions between models.
     var modelDirectory: URL {
-        let dir = Self.modelsRootDirectory.appendingPathComponent(selectedVariant.rawValue, isDirectory: true)
+        modelDirectory(for: selectedVariant)
+    }
+
+    private func modelDirectory(for variant: WhisperModelVariant) -> URL {
+        let dir = Self.modelsRootDirectory.appendingPathComponent(variant.rawValue, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -193,12 +199,13 @@ class WhisperModelManager: ObservableObject {
 
         state = .loading
 
-        // Try stored path first
-        let modelPath: String? = UserDefaults.standard.string(forKey: modelPathKey)
+        let variant = selectedVariant
+        let modelDirectory = modelDirectory(for: variant)
+        let modelPath = UserDefaults.standard.string(forKey: modelPathKey(for: variant))
 
         let task = Task<WhisperKit, any Error> {
             let config = WhisperKitConfig(
-                model: selectedVariant.whisperKitVariant,
+                model: variant.whisperKitVariant,
                 downloadBase: modelDirectory,
                 modelFolder: modelPath,
                 verbose: false,
@@ -214,6 +221,9 @@ class WhisperModelManager: ObservableObject {
         do {
             let kit = try await task.value
             loadTask = nil
+            guard selectedVariant == variant else {
+                throw CancellationError()
+            }
             whisperKit = kit
             state = .ready
             refreshModelSizeOnDisk()
@@ -302,7 +312,11 @@ class WhisperModelManager: ObservableObject {
 
     /// UserDefaults key for the stored model path, unique per variant.
     private var modelPathKey: String {
-        "whisperModelPath_\(selectedVariant.rawValue)"
+        modelPathKey(for: selectedVariant)
+    }
+
+    private func modelPathKey(for variant: WhisperModelVariant) -> String {
+        "whisperModelPath_\(variant.rawValue)"
     }
 }
 

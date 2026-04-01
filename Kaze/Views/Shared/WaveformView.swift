@@ -5,6 +5,7 @@ struct WaveformView: View {
     var isRecording: Bool
     var transcribedText: String
     var isEnhancing: Bool = false
+    var processingStatusText: String = ""
     var notchMode: Bool = false
     var notchVisible: Bool = false
 
@@ -18,6 +19,7 @@ struct WaveformView: View {
 
     /// Whether we have text to show (drives expansion)
     private var hasText: Bool { !transcribedText.isEmpty && !isEnhancing }
+    private var hasProcessingStatus: Bool { isEnhancing && !processingStatusText.isEmpty }
 
     /// Compact when enhancing or no text; expanded when recording with text
     private var isCompact: Bool { isEnhancing || !hasText }
@@ -72,6 +74,8 @@ struct WaveformView: View {
 
             if hasText {
                 transcriptionTextRow(maxWidth: 260)
+            } else if hasProcessingStatus {
+                processingStatusRow(maxWidth: 260)
             }
         }
         .padding(.horizontal, isCompact ? 14 : 20)
@@ -128,6 +132,11 @@ struct WaveformView: View {
             // Live text below the notch bar (only Direct Dictation provides this)
             if hasText {
                 transcriptionTextRow(maxWidth: notchContentWidth - 56)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 6)
+                    .padding(.bottom, 12)
+            } else if hasProcessingStatus {
+                processingStatusRow(maxWidth: notchContentWidth - 56)
                     .padding(.horizontal, 4)
                     .padding(.top, 6)
                     .padding(.bottom, 12)
@@ -201,6 +210,15 @@ struct WaveformView: View {
             }
         }
         .transition(.opacity)
+    }
+
+    private func processingStatusRow(maxWidth: CGFloat) -> some View {
+        Text(processingStatusText)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.72))
+            .lineLimit(1)
+            .frame(maxWidth: maxWidth)
+            .transition(.opacity)
     }
 
     // MARK: - Waveform bars (recording state)
@@ -404,9 +422,9 @@ struct NotchShape: Shape {
 #Preview {
     VStack(spacing: 20) {
         WaveformView(audioLevel: 0.6, isRecording: true, transcribedText: "Hello world this is a long test")
-        WaveformView(audioLevel: 0, isRecording: false, transcribedText: "", isEnhancing: true)
+        WaveformView(audioLevel: 0, isRecording: false, transcribedText: "", isEnhancing: true, processingStatusText: "Warming up model...")
         WaveformView(audioLevel: 0.6, isRecording: true, transcribedText: "Hello world this is a long test", notchMode: true)
-        WaveformView(audioLevel: 0, isRecording: false, transcribedText: "", isEnhancing: true, notchMode: true)
+        WaveformView(audioLevel: 0, isRecording: false, transcribedText: "", isEnhancing: true, processingStatusText: "Warming up model...", notchMode: true)
     }
     .padding()
     .background(Color.gray.opacity(0.3))

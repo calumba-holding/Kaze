@@ -423,7 +423,7 @@ private struct GeneralSettingsView: View {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Loading model...")
+                Text("Warming up model...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -533,7 +533,7 @@ private struct GeneralSettingsView: View {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Loading model...")
+                Text("Warming up model...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
