@@ -20,6 +20,32 @@
     -->
 
     <item>
+      <title>Version 0.79</title>
+      <sparkle:version>10</sparkle:version>
+      <sparkle:shortVersionString>0.79</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 02 Apr 2026 03:15:07 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.79</h2>
+        <ul>
+          <li>Removed Qwen model support</li>
+          <li>Fixed settings window invocation</li>
+          <li>New onboarding experience</li>
+          <li>Added usage stats</li>
+          <li>Removed unused files</li>
+          <li>Fixed SwiftUI warnings</li>
+          <li>Major refactor</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.79/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="4dZ8YBC5U8QDwnB5DgSOaoz4+dHzvU/GvKIpzt5EBG4ym7p/OqzAnVsLT0eF17PzpWWluBIqmEsS5I+/i1lWDw=="
+        length="6770210"
+      />
+    </item>
+
+    <item>
       <title>Version 0.78</title>
       <sparkle:version>9</sparkle:version>
       <sparkle:shortVersionString>0.78</sparkle:shortVersionString>
