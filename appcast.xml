@@ -20,6 +20,26 @@
     -->
 
     <item>
+      <title>Version 0.80</title>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>0.80</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Thu, 09 Apr 2026 07:57:40 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.80</h2>
+        <ul>
+          <li>Fix the onboarding flow - permission buttons were not working</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.80/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="9VdX/j25kvPWSj8UJbr6TWqhyNw9BKbN/soL77gAAS6Mfb00IEdWtlWVTwIQJn2qWhwL5XDsMz7yb2M9JAzpDw=="
+        length="6740791"
+      />
+    </item>
+
+    <item>
       <title>Version 0.79</title>
       <sparkle:version>10</sparkle:version>
       <sparkle:shortVersionString>0.79</sparkle:shortVersionString>
