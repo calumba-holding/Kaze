@@ -339,27 +339,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func showOnboarding() {
-        // Start at the animated card size; the view will expand from center on Continue.
-        let initialSize = NSSize(width: 370, height: 450)
-
-        let window = NSWindow(
-            contentRect: NSRect(origin: .zero, size: initialSize),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.hasShadow = true
-        window.level = .normal
-        window.isMovableByWindowBackground = true
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-
-        var onboardingView = OnboardingView(
+        let onboardingView = OnboardingView(
             whisperModelManager: whisperModelManager,
-            parakeetModelManager: parakeetModelManager,
-            window: window
+            parakeetModelManager: parakeetModelManager
         ) { [weak self] in
             self?.onboardingWindowController?.window?.close()
             self?.onboardingWindowController = nil
@@ -368,10 +350,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 await self?.requestPermissionsAndSetupHotkey()
             }
         }
-
         let hostingController = NSHostingController(rootView: onboardingView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Welcome to Kaze"
         window.contentViewController = hostingController
-        window.setContentSize(initialSize)
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 480, height: 540))
+
+        window.delegate = self
 
         let controller = NSWindowController(window: window)
         onboardingWindowController = controller

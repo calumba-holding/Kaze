@@ -16,21 +16,21 @@ struct OnboardingView: View {
     @State private var microphoneGranted = false
     @State private var accessibilityGranted = false
     @State private var permissionPollTimer: Timer?
+    @State private var activePermissionRequests = Set<PermissionKind>()
 
     // Model managers
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
     @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
-    /// The hosting window, used to animate center-origin resize on step transitions.
-    weak var window: NSWindow?
-
     var onComplete: () -> Void
 
     private let totalSteps = 6
 
-    /// Whether we've expanded beyond the initial animated card size.
-    @State private var isExpanded = false
+    private enum PermissionKind: Hashable {
+        case microphone
+        case accessibility
+    }
 
     private var selectedEngine: TranscriptionEngine {
         TranscriptionEngine(rawValue: engineRaw) ?? .parakeet
@@ -59,15 +59,10 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Content area -- all steps live in the same view tree
+            // Content area
             Group {
                 switch currentStep {
-                case 0:
-                    animatedWelcomeStep
-                        .transition(.asymmetric(
-                            insertion: .opacity,
-                            removal: .scale(scale: 0.85, anchor: .center).combined(with: .opacity)
-                        ))
+                case 0: welcomeStep
                 case 1: permissionsStep
                 case 2: hotkeyStep
                 case 3: engineStep
@@ -77,77 +72,72 @@ struct OnboardingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(.easeInOut(duration: 0.3), value: currentStep)
+            .animation(.easeInOut(duration: 0.25), value: currentStep)
 
-            // Navigation bar -- hidden during step 0
-            if isExpanded {
-                Divider()
+            Divider()
 
-                HStack {
-                    // Step indicators
-                    HStack(spacing: 6) {
-                        ForEach(0..<totalSteps, id: \.self) { step in
-                            Circle()
-                                .fill(step == currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-
-                    Spacer()
-
-                    if currentStep > 1 && currentStep < totalSteps - 1 {
-                        Button("Back") {
-                            hotkeyRecorder.stop()
-                            if currentStep == 5 && !selectedEngine.requiresModelDownload {
-                                currentStep = 3
-                            } else {
-                                currentStep -= 1
-                            }
-                        }
-                        .controlSize(.regular)
-                    }
-
-                    if currentStep < totalSteps - 1 {
-                        Button("Continue") {
-                            hotkeyRecorder.stop()
-                            if currentStep == 2 {
-                                hotkeyShortcut.saveToDefaults()
-                            }
-                            if currentStep == 3 {
-                                if !selectedEngine.requiresModelDownload {
-                                    currentStep = 5
-                                    return
-                                }
-                            }
-                            currentStep += 1
-                        }
-                        .keyboardShortcut(.return, modifiers: [])
-                        .controlSize(.regular)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(currentStep == 4 && isModelDownloading)
-                    } else {
-                        Button("Get Started") {
-                            hotkeyShortcut.saveToDefaults()
-                            UserDefaults.standard.set(true, forKey: AppPreferenceKey.hasCompletedOnboarding)
-                            onComplete()
-                        }
-                        .keyboardShortcut(.return, modifiers: [])
-                        .controlSize(.regular)
-                        .buttonStyle(.borderedProminent)
+            // Navigation bar
+            HStack {
+                // Step indicators
+                HStack(spacing: 6) {
+                    ForEach(0..<totalSteps, id: \.self) { step in
+                        Circle()
+                            .fill(step == currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .frame(width: 6, height: 6)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
+
+                Spacer()
+
+                if currentStep > 0 && currentStep < totalSteps - 1 {
+                    Button("Back") {
+                        hotkeyRecorder.stop()
+                        if currentStep == 5 && !selectedEngine.requiresModelDownload {
+                            // Skipped model download step — go back to engine selection
+                            currentStep = 3
+                        } else {
+                            currentStep -= 1
+                        }
+                    }
+                    .controlSize(.regular)
+                }
+
+                if currentStep < totalSteps - 1 {
+                    Button("Continue") {
+                        hotkeyRecorder.stop()
+                        if currentStep == 2 {
+                            // Save hotkey before advancing
+                            hotkeyShortcut.saveToDefaults()
+                        }
+                        if currentStep == 3 {
+                            // Moving from engine step to model download step
+                            // If engine doesn't require download, skip model step
+                            if !selectedEngine.requiresModelDownload {
+                                currentStep = 5 // Skip to done
+                                return
+                            }
+                        }
+                        currentStep += 1
+                    }
+                    .keyboardShortcut(.return, modifiers: [])
+                    .controlSize(.regular)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(currentStep == 4 && isModelDownloading) // Can't advance during download
+                } else {
+                    Button("Get Started") {
+                        hotkeyShortcut.saveToDefaults()
+                        UserDefaults.standard.set(true, forKey: AppPreferenceKey.hasCompletedOnboarding)
+                        onComplete()
+                    }
+                    .keyboardShortcut(.return, modifiers: [])
+                    .controlSize(.regular)
+                    .buttonStyle(.borderedProminent)
+                }
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
-        .frame(
-            width: isExpanded ? 480 : 370,
-            height: isExpanded ? 540 : 450
-        )
-        .background(.windowBackground)
-        .clipShape(.rect(cornerRadius: 30))
-        .gesture(WindowDragGesture())
+        .frame(width: 480, height: 540)
         .onAppear {
             hotkeyRecorder.onShortcutRecorded = { shortcut in
                 hotkeyShortcut = shortcut
@@ -156,86 +146,6 @@ struct OnboardingView: View {
         .onDisappear {
             hotkeyRecorder.stop()
             stopPermissionPolling()
-        }
-    }
-
-    /// Animates the NSWindow frame from its center so the expansion looks symmetric.
-    private func expandFromCenter() {
-        guard let window else {
-            withAnimation(.easeInOut(duration: 0.35)) {
-                isExpanded = true
-            }
-            return
-        }
-        let oldFrame = window.frame
-        let newSize = NSSize(width: 480, height: 540)
-        let newOrigin = NSPoint(
-            x: oldFrame.midX - newSize.width / 2,
-            y: oldFrame.midY - newSize.height / 2
-        )
-        let newFrame = NSRect(origin: newOrigin, size: newSize)
-        withAnimation(.easeInOut(duration: 0.35)) {
-            isExpanded = true
-        }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.35
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(newFrame, display: true)
-        }
-    }
-
-    // MARK: - Step 0: Animated Welcome
-
-    private var animatedWelcomeStep: some View {
-        AnimatedOnboardingView(
-            foregroundColor: .white,
-            tint: .accentColor
-        ) { isAnimating in
-            if let icon = NSImage(named: "kaze-icon") {
-                Image(nsImage: icon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 120, height: 120)
-                    .clipShape(.rect(cornerRadius: 24, style: .continuous))
-                    .scaleEffect(isAnimating ? 0.65 : 1)
-            } else {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 100))
-                    .foregroundStyle(.white)
-                    .blendMode(.softLight)
-                    .scaleEffect(isAnimating ? 0.5 : 1)
-            }
-        } content: { isAnimating in
-            VStack(spacing: 15) {
-                VStack(spacing: 6) {
-                    Text("Welcome to Kaze")
-                        .font(.title.bold())
-
-                    Text("Speech-to-text that runs entirely on your Mac.\nNo cloud, no subscription, no data leaves your device.")
-                        .font(.caption)
-                        .foregroundStyle(.gray)
-                        .multilineTextAlignment(.center)
-                }
-
-                Button {
-                    expandFromCenter()
-                    withAnimation(.easeInOut(duration: 0.35)) {
-                        currentStep = 1
-                    }
-                } label: {
-                    Text("Continue")
-                        .fontWeight(.medium)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: 230)
-                        .padding(.vertical, 12)
-                        .background(Color.accentColor.gradient, in: .capsule)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.return, modifiers: [])
-            }
-            .padding(.top, 45)
-        } onClose: {
-            onComplete()
         }
     }
 
@@ -295,6 +205,7 @@ struct OnboardingView: View {
                     title: "Microphone",
                     description: "Required to capture your voice for transcription.",
                     isGranted: microphoneGranted,
+                    isRequesting: activePermissionRequests.contains(.microphone),
                     action: requestMicrophonePermission
                 )
 
@@ -304,6 +215,7 @@ struct OnboardingView: View {
                     title: "Accessibility",
                     description: "Required to detect your global hotkey.",
                     isGranted: accessibilityGranted,
+                    isRequesting: activePermissionRequests.contains(.accessibility),
                     action: requestAccessibilityPermission
                 )
             }
@@ -325,6 +237,7 @@ struct OnboardingView: View {
         title: String,
         description: String,
         isGranted: Bool,
+        isRequesting: Bool,
         action: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 12) {
@@ -348,11 +261,12 @@ struct OnboardingView: View {
                     .font(.caption)
                     .foregroundStyle(.green)
             } else {
-                Button("Grant") {
+                Button(isRequesting ? "Opening…" : "Grant") {
                     action()
                 }
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
+                .disabled(isRequesting)
             }
         }
         .padding(.horizontal, 14)
@@ -372,6 +286,7 @@ struct OnboardingView: View {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             microphoneGranted = true
+            activePermissionRequests.remove(.microphone)
         default:
             microphoneGranted = false
         }
@@ -380,24 +295,73 @@ struct OnboardingView: View {
         accessibilityGranted = AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
         )
+        if accessibilityGranted {
+            activePermissionRequests.remove(.accessibility)
+        }
     }
 
     private func requestMicrophonePermission() {
-        Task {
-            let granted = await AVCaptureDevice.requestAccess(for: .audio)
-            await MainActor.run {
-                microphoneGranted = granted
+        activePermissionRequests.insert(.microphone)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            microphoneGranted = true
+            activePermissionRequests.remove(.microphone)
+        case .notDetermined:
+            DispatchQueue.main.async {
+                Task {
+                    let granted = await AVCaptureDevice.requestAccess(for: .audio)
+                    await MainActor.run {
+                        microphoneGranted = granted
+                        if !granted {
+                            openPrivacySettingsPane(anchor: "Privacy_Microphone")
+                        }
+                        activePermissionRequests.remove(.microphone)
+                    }
+                }
+            }
+        case .denied, .restricted:
+            openPrivacySettingsPane(anchor: "Privacy_Microphone")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                activePermissionRequests.remove(.microphone)
+            }
+        @unknown default:
+            openPrivacySettingsPane(anchor: "Privacy_Microphone")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                activePermissionRequests.remove(.microphone)
             }
         }
     }
 
     private func requestAccessibilityPermission() {
-        // This opens the Accessibility pane in System Settings and prompts the user
-        // We use the prompt option to show the system dialog
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        accessibilityGranted = trusted
-        // If not yet trusted, the system will show a dialog. We poll for changes.
+        activePermissionRequests.insert(.accessibility)
+        DispatchQueue.main.async {
+            // Opening System Settings during the button's click event can leave AppKit
+            // rendering the button as permanently pressed. Defer the prompt until the
+            // next run loop so the click fully completes before focus changes.
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            let trusted = AXIsProcessTrustedWithOptions(options)
+            accessibilityGranted = trusted
+
+            if trusted {
+                activePermissionRequests.remove(.accessibility)
+                return
+            }
+
+            openPrivacySettingsPane(anchor: "Privacy_Accessibility")
+
+            // The permission is granted manually in System Settings, so only keep the
+            // "Opening…" state long enough to reflect the handoff without trapping the button.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                activePermissionRequests.remove(.accessibility)
+            }
+        }
+    }
+
+    private func openPrivacySettingsPane(anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     private func startPermissionPolling() {
