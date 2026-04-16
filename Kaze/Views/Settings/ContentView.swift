@@ -118,10 +118,14 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppPreferenceKey.transcriptionEngine) private var engineRaw = TranscriptionEngine.dictation.rawValue
     @AppStorage(AppPreferenceKey.enhancementMode) private var enhancementModeRaw = EnhancementMode.off.rawValue
     @AppStorage(AppPreferenceKey.enhancementSystemPrompt) private var systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
+    @AppStorage(AppPreferenceKey.cloudAIProvider) private var cloudProviderRaw = CloudAIProvider.openAI.rawValue
+    @AppStorage(AppPreferenceKey.cloudAIModel) private var cloudModelID = CloudAIProvider.openAI.defaultModel.id
     @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
     @AppStorage(AppPreferenceKey.selectedMicrophoneID) private var selectedMicrophoneID = ""
     @State private var hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
     @State private var availableMicrophones: [AudioInputDevice] = []
+    @State private var apiKeyInput = ""
+    @State private var apiKeySaved = false
     @StateObject private var audioDeviceObserver = AudioDeviceObserver()
     @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
@@ -153,6 +157,14 @@ private struct GeneralSettingsView: View {
             return TextEnhancer.isAvailable
         }
         return false
+    }
+
+    private var selectedCloudProvider: CloudAIProvider {
+        CloudAIProvider(rawValue: cloudProviderRaw) ?? .openAI
+    }
+
+    private var selectedEnhancementMode: EnhancementMode {
+        EnhancementMode(rawValue: enhancementModeRaw) ?? .off
     }
 
     var body: some View {
@@ -271,26 +283,105 @@ private struct GeneralSettingsView: View {
                     Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
                     Text(EnhancementMode.appleIntelligence.title)
                         .tag(EnhancementMode.appleIntelligence.rawValue)
+                    Text(EnhancementMode.cloudAI.title)
+                        .tag(EnhancementMode.cloudAI.rawValue)
                 }
                 .labelsHidden()
-                .disabled(selectedEngine != .dictation)
             }
 
-            if selectedEngine != .dictation {
-                formRow("") {
-                    Label("Text enhancement is only available with Direct Dictation. AI models already produce enhanced output.", systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !appleIntelligenceAvailable {
-                formRow("") {
-                    Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            if selectedEnhancementMode == .appleIntelligence {
+                if !appleIntelligenceAvailable {
+                    formRow("") {
+                        Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if selectedEngine != .dictation {
+                    formRow("") {
+                        Label("Apple Intelligence enhancement is only available with Direct Dictation. Use Cloud AI for Whisper/Parakeet.", systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
-            if enhancementModeRaw == EnhancementMode.appleIntelligence.rawValue, selectedEngine == .dictation {
+            // Cloud AI configuration
+            if selectedEnhancementMode == .cloudAI {
+                formRow("Provider:") {
+                    Picker("Provider", selection: Binding(
+                        get: { cloudProviderRaw },
+                        set: { newValue in
+                            cloudProviderRaw = newValue
+                            // Reset model to the provider's default when switching
+                            let provider = CloudAIProvider(rawValue: newValue) ?? .openAI
+                            cloudModelID = provider.defaultModel.id
+                            // Load existing API key for the new provider
+                            apiKeyInput = KeychainManager.getAPIKey(for: provider) ?? ""
+                            apiKeySaved = !apiKeyInput.isEmpty
+                        }
+                    )) {
+                        ForEach(CloudAIProvider.allCases) { provider in
+                            Text(provider.title).tag(provider.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                formRow("Model:") {
+                    Picker("Model", selection: $cloudModelID) {
+                        ForEach(selectedCloudProvider.models) { model in
+                            Text(model.title).tag(model.id)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                formRow("API key:") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            SecureField("Enter your \(selectedCloudProvider.title) API key", text: $apiKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                                .onChange(of: apiKeyInput) {
+                                    apiKeySaved = false
+                                }
+
+                            Button(apiKeySaved ? "Saved" : "Save") {
+                                if !apiKeyInput.isEmpty {
+                                    KeychainManager.saveAPIKey(apiKeyInput, for: selectedCloudProvider)
+                                    apiKeySaved = true
+                                }
+                            }
+                            .controlSize(.small)
+                            .disabled(apiKeyInput.isEmpty || apiKeySaved)
+
+                            if KeychainManager.hasAPIKey(for: selectedCloudProvider) {
+                                Button("Remove") {
+                                    KeychainManager.deleteAPIKey(for: selectedCloudProvider)
+                                    apiKeyInput = ""
+                                    apiKeySaved = false
+                                }
+                                .controlSize(.small)
+                                .foregroundStyle(.red)
+                            }
+                        }
+
+                        HStack(spacing: 4) {
+                            Text("Stored securely in your Mac's Keychain.")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            if let url = selectedCloudProvider.apiKeyURL {
+                                Link("Get API key", destination: url)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // System prompt editor (for Apple Intelligence and Cloud AI)
+            if (selectedEnhancementMode == .appleIntelligence && selectedEngine == .dictation)
+                || selectedEnhancementMode == .cloudAI {
                 formRow("System prompt:") {
                     VStack(alignment: .leading, spacing: 6) {
                         TextEditor(text: $systemPrompt)
@@ -308,7 +399,7 @@ private struct GeneralSettingsView: View {
                             )
 
                         HStack {
-                            Text("Customise how Apple Intelligence enhances your transcriptions.")
+                            Text("Customise how AI enhances your transcriptions.")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                             Spacer()
@@ -341,6 +432,9 @@ private struct GeneralSettingsView: View {
                 refreshAvailableMicrophones()
             }
             audioDeviceObserver.start()
+            // Load existing API key for the current provider
+            apiKeyInput = KeychainManager.getAPIKey(for: selectedCloudProvider) ?? ""
+            apiKeySaved = !apiKeyInput.isEmpty
         }
     }
 
@@ -581,7 +675,30 @@ private struct ControlsSettingsView: View {
     @AppStorage(AppPreferenceKey.notchMode) private var notchMode = true
     @AppStorage(AppPreferenceKey.appendTrailingSpace) private var appendTrailingSpace = false
     @AppStorage(AppPreferenceKey.removeFillerWords) private var removeFillerWords = false
+    @AppStorage(AppPreferenceKey.smartFormattingEnabled) private var smartFormattingEnabled = false
+    @AppStorage(AppPreferenceKey.smartFormattingBackend) private var formattingBackendRaw = FormattingBackend.appleIntelligence.rawValue
+    @AppStorage(AppPreferenceKey.cloudAIProvider) private var cloudProviderRaw = CloudAIProvider.openAI.rawValue
     @ObservedObject var updaterManager: UpdaterManager
+
+    private var appleIntelligenceAvailable: Bool {
+        if #available(macOS 26.0, *) {
+            return TextFormatter.isAvailable
+        }
+        return false
+    }
+
+    private var cloudAIConfigured: Bool {
+        let provider = CloudAIProvider(rawValue: cloudProviderRaw) ?? .openAI
+        return KeychainManager.hasAPIKey(for: provider)
+    }
+
+    private var smartFormattingAvailable: Bool {
+        let backend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
+        switch backend {
+        case .appleIntelligence: return appleIntelligenceAvailable
+        case .cloudAI: return cloudAIConfigured
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -630,6 +747,60 @@ private struct ControlsSettingsView: View {
                 Text("Automatically strips hesitation sounds like \"uh\", \"um\", \"hmm\", and similar fillers from transcriptions before pasting.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            sectionDivider()
+
+            // MARK: Smart Formatting (Experimental)
+            formRow("Smart formatting:") {
+                Toggle(isOn: $smartFormattingEnabled) {
+                    HStack(spacing: 4) {
+                        Text("Auto-detect paragraphs and lists")
+                        Text("Experimental")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule()
+                                    .fill(.orange.opacity(0.15))
+                            )
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+
+            if smartFormattingEnabled {
+                formRow("Formatting backend:") {
+                    Picker("Backend", selection: $formattingBackendRaw) {
+                        ForEach(FormattingBackend.allCases) { backend in
+                            Text(backend.title).tag(backend.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+
+            formRow("") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Uses AI to add line breaks, paragraphs, and bullet/numbered lists to your transcriptions. Spoken cues like \"new line\" or \"bullet point\" are converted into actual formatting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if smartFormattingEnabled && !smartFormattingAvailable {
+                        let backend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
+                        if backend == .appleIntelligence {
+                            Label("Requires macOS 26 with Apple Intelligence enabled.", systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Label("Configure your Cloud AI provider and API key in the General tab first.", systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
 
             sectionDivider()

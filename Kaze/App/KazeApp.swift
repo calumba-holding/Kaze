@@ -48,6 +48,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var lastAppliedIconName: String?
 
     private var enhancer: TextEnhancer?
+    private var formatter: TextFormatter?
+    private let cloudEnhancer = CloudEnhancer()
     private var settingsWindowController: NSWindowController?
     private var onboardingWindowController: NSWindowController?
 
@@ -149,9 +151,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         migrateLegacyPreferences()
 
-        // Set up Apple Intelligence enhancer if available
+        // Set up Apple Intelligence enhancer and formatter if available
         if #available(macOS 26.0, *), TextEnhancer.isAvailable {
             enhancer = TextEnhancer()
+            formatter = TextFormatter()
         }
 
         // Menu bar icon — use a dark/light appearance-aware icon
@@ -686,10 +689,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let speechDuration = session?.speechDuration ?? 0
         let source = session?.source
 
-        // Only apply AI enhancement for Direct Dictation — AI models already produce enhanced output.
-        if enhancement == .appleIntelligence, engine == .dictation, let enhancer {
+        // Determine what post-processing is needed
+        let smartFormattingEnabled = UserDefaults.standard.bool(forKey: AppPreferenceKey.smartFormattingEnabled)
+        let formattingBackendRaw = UserDefaults.standard.string(forKey: AppPreferenceKey.smartFormattingBackend) ?? FormattingBackend.appleIntelligence.rawValue
+        let formattingBackend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
+
+        // Enhancement: Apple Intelligence (Dictation only), Cloud AI (all engines)
+        let needsLocalEnhancement = enhancement == .appleIntelligence && engine == .dictation && enhancer != nil
+        let needsCloudEnhancement = enhancement == .cloudAI
+
+        // Formatting: Apple Intelligence (local) or Cloud AI
+        let needsLocalFormatting = smartFormattingEnabled && formattingBackend == .appleIntelligence && formatter != nil
+        let needsCloudFormatting = smartFormattingEnabled && formattingBackend == .cloudAI
+
+        let needsAsyncProcessing = needsLocalEnhancement || needsCloudEnhancement || needsLocalFormatting || needsCloudFormatting
+
+        if needsAsyncProcessing {
+            let statusText = (needsLocalEnhancement || needsCloudEnhancement) ? "Enhancing text..." : "Formatting..."
             overlayState.isEnhancing = true
-            overlayState.processingStatusText = "Enhancing text..."
+            overlayState.processingStatusText = statusText
             setEnhancingState(true, session: session)
             Task {
                 defer {
@@ -702,51 +720,80 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.updateStatusItemIndicator()
                     self.scheduleIdleModelUnload()
                 }
-                do {
-                    if #available(macOS 26.0, *) {
-                        var prompt = UserDefaults.standard.string(forKey: AppPreferenceKey.enhancementSystemPrompt)
-                            ?? AppPreferenceKey.defaultEnhancementPrompt
-                        // Inject custom vocabulary so the enhancer preserves these terms
-                        let words = self.customWordsManager.words
-                        if !words.isEmpty {
-                            prompt += "\n\nIMPORTANT: The following are custom words, names, or abbreviations the user has defined. Always preserve their exact spelling and casing: \(words.joined(separator: ", "))."
-                        }
-                        let enhanced = try await enhancer.enhance(cleanedText, systemPrompt: prompt)
-                        self.typeText(enhanced)
-                        self.historyManager.addRecord(
-                            TranscriptionRecord(
-                                text: enhanced,
-                                engine: engine,
-                                wasEnhanced: true,
-                                speechDuration: speechDuration,
-                                source: source
-                            )
-                        )
-                    } else {
-                        self.typeText(cleanedText)
-                        self.historyManager.addRecord(
-                            TranscriptionRecord(
-                                text: cleanedText,
-                                engine: engine,
-                                wasEnhanced: false,
-                                speechDuration: speechDuration,
-                                source: source
-                            )
-                        )
-                    }
-                } catch {
-                    print("AI enhancement failed, using raw text: \(error)")
-                    self.typeText(cleanedText)
-                    self.historyManager.addRecord(
-                        TranscriptionRecord(
-                            text: cleanedText,
-                            engine: engine,
-                            wasEnhanced: false,
-                            speechDuration: speechDuration,
-                            source: source
-                        )
-                    )
+                var processedText = cleanedText
+                var wasEnhanced = false
+
+                // Build the enhancement system prompt with custom vocabulary
+                var enhancementPrompt = UserDefaults.standard.string(forKey: AppPreferenceKey.enhancementSystemPrompt)
+                    ?? AppPreferenceKey.defaultEnhancementPrompt
+                let words = self.customWordsManager.words
+                if !words.isEmpty {
+                    enhancementPrompt += "\n\nIMPORTANT: The following are custom words, names, or abbreviations the user has defined. Always preserve their exact spelling and casing: \(words.joined(separator: ", "))."
                 }
+
+                // Step 1: AI Enhancement
+                if needsLocalEnhancement {
+                    do {
+                        if #available(macOS 26.0, *) {
+                            processedText = try await enhancer!.enhance(processedText, systemPrompt: enhancementPrompt)
+                            wasEnhanced = true
+                        }
+                    } catch {
+                        print("Apple Intelligence enhancement failed: \(error)")
+                    }
+                } else if needsCloudEnhancement {
+                    do {
+                        let provider = CloudAIProvider(rawValue: UserDefaults.standard.string(forKey: AppPreferenceKey.cloudAIProvider) ?? "") ?? .openAI
+                        let modelID = UserDefaults.standard.string(forKey: AppPreferenceKey.cloudAIModel) ?? provider.defaultModel.id
+                        processedText = try await self.cloudEnhancer.enhance(
+                            processedText,
+                            systemPrompt: enhancementPrompt,
+                            provider: provider,
+                            modelID: modelID
+                        )
+                        wasEnhanced = true
+                    } catch {
+                        print("Cloud AI enhancement failed: \(error)")
+                    }
+                }
+
+                // Step 2: Smart Formatting
+                if needsLocalFormatting || needsCloudFormatting {
+                    self.overlayState.processingStatusText = "Formatting..."
+
+                    if needsLocalFormatting {
+                        do {
+                            if #available(macOS 26.0, *) {
+                                processedText = try await self.formatter!.format(processedText)
+                            }
+                        } catch {
+                            print("Apple Intelligence formatting failed: \(error)")
+                        }
+                    } else if needsCloudFormatting {
+                        do {
+                            let provider = CloudAIProvider(rawValue: UserDefaults.standard.string(forKey: AppPreferenceKey.cloudAIProvider) ?? "") ?? .openAI
+                            let modelID = UserDefaults.standard.string(forKey: AppPreferenceKey.cloudAIModel) ?? provider.defaultModel.id
+                            processedText = try await self.cloudEnhancer.format(
+                                processedText,
+                                provider: provider,
+                                modelID: modelID
+                            )
+                        } catch {
+                            print("Cloud AI formatting failed: \(error)")
+                        }
+                    }
+                }
+
+                self.typeText(processedText)
+                self.historyManager.addRecord(
+                    TranscriptionRecord(
+                        text: processedText,
+                        engine: engine,
+                        wasEnhanced: wasEnhanced,
+                        speechDuration: speechDuration,
+                        source: source
+                    )
+                )
             }
         } else {
             typeText(cleanedText)
