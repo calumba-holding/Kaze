@@ -6,13 +6,15 @@ import ServiceManagement
 
 // MARK: - Settings Tab Enum
 
-private enum SettingsTab: String, CaseIterable {
+private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case controls
     case vocabulary
     case stats
     case history
     case debug
+
+    var id: Self { self }
 
     var title: String {
         switch self {
@@ -47,68 +49,107 @@ struct ContentView: View {
     @ObservedObject var updaterManager: UpdaterManager
     let restartOnboarding: () -> Void
 
-    @State private var selectedTab: SettingsTab = .general
+    @State private var selectedTab: SettingsTab? = .general
+
+    private var activeTab: SettingsTab {
+        selectedTab ?? .general
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Tab bar
-            tabBar
+        NavigationSplitView {
+            List(SettingsTab.allCases, selection: $selectedTab) { tab in
+                SettingsSidebarRow(tab: tab)
+                    .tag(tab)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(190)
+        } detail: {
+            settingsDetail(for: activeTab)
+                .settingsDetailTopAligned()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .toolbar(.hidden, for: .windowToolbar)
+        .background(SettingsWindowConfigurator())
+        .frame(width: 760, height: 640)
+    }
 
-            Divider()
+    @ViewBuilder
+    private func settingsDetail(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .general:
+            GeneralSettingsView(
+                whisperModelManager: whisperModelManager,
+                parakeetModelManager: parakeetModelManager
+            )
+        case .controls:
+            ControlsSettingsView(updaterManager: updaterManager)
+        case .vocabulary:
+            VocabularySettingsView(customWordsManager: customWordsManager)
+        case .stats:
+            StatsSettingsView(historyManager: historyManager)
+        case .history:
+            HistorySettingsView(historyManager: historyManager)
+        case .debug:
+            DebugSettingsView(restartOnboarding: restartOnboarding)
+        }
+    }
+}
 
-            // Tab content
+private struct SettingsDetailTopAlignment: ViewModifier {
+    // NavigationSplitView keeps the detail column below the titlebar while the sidebar extends into it.
+    private let titlebarCompensation: CGFloat = 52
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: -titlebarCompensation)
+            .padding(.bottom, -titlebarCompensation)
+    }
+}
+
+private extension View {
+    func settingsDetailTopAligned() -> some View {
+        modifier(SettingsDetailTopAlignment())
+    }
+}
+
+private struct SettingsSidebarRow: View {
+    let tab: SettingsTab
+
+    var body: some View {
+        Label {
+            Text(tab.title)
+        } icon: {
             Group {
-                switch selectedTab {
-                case .general:
-                    GeneralSettingsView(
-                        whisperModelManager: whisperModelManager,
-                        parakeetModelManager: parakeetModelManager
-                    )
-                case .controls:
-                    ControlsSettingsView(updaterManager: updaterManager)
-                case .vocabulary:
-                    VocabularySettingsView(customWordsManager: customWordsManager)
-                case .stats:
-                    StatsSettingsView(historyManager: historyManager)
-                case .history:
-                    HistorySettingsView(historyManager: historyManager)
-                case .debug:
-                    DebugSettingsView(restartOnboarding: restartOnboarding)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    // MARK: - Tab Bar
-
-    private var tabBar: some View {
-        HStack(spacing: 2) {
-            ForEach(SettingsTab.allCases, id: \.self) { tab in
-                tabButton(for: tab)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-    }
-
-    private func tabButton(for tab: SettingsTab) -> some View {
-        Button {
-            selectedTab = tab
-        } label: {
-            VStack(spacing: 3) {
                 Image(systemName: tab.icon)
-                    .font(.system(size: 18))
-                    .frame(width: 28, height: 22)
-                Text(tab.title)
-                    .font(.system(size: 10))
             }
-            .foregroundStyle(selectedTab == tab ? Color.accentColor : .secondary)
-            .frame(width: 68, height: 46)
-            .contentShape(Rectangle())
+            .frame(width: 18)
         }
-        .buttonStyle(.plain)
+    }
+}
+
+private struct SettingsWindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            configure(window: view.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            configure(window: nsView.window)
+        }
+    }
+
+    private func configure(window: NSWindow?) {
+        guard let window else { return }
+        window.title = "Settings"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.isMovableByWindowBackground = true
     }
 }
 
@@ -168,154 +209,121 @@ private struct GeneralSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-        VStack(spacing: 0) {
-            // MARK: Transcription
-            formRow("Transcription engine:") {
-                Picker("Engine", selection: $engineRaw) {
+        Form {
+            Section("Transcription") {
+                Picker("Transcription engine", selection: $engineRaw) {
                     ForEach(TranscriptionEngine.allCases) { engine in
                         Text(engine.title).tag(engine.rawValue)
                     }
                 }
-                .labelsHidden()
-            }
 
-            // Engine details card: description + model controls + status
-            formRow("") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(selectedEngine.description)
+                Text(selectedEngine.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if selectedEngine == .whisper {
+                    Picker("Whisper model", selection: Binding(
+                        get: { whisperModelManager.selectedVariant },
+                        set: { whisperModelManager.selectedVariant = $0 }
+                    )) {
+                        ForEach(WhisperModelVariant.allCases) { variant in
+                            Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
+                        }
+                    }
+                    .disabled(isModelBusy)
+
+                    Text(whisperModelManager.selectedVariant.qualityDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    if selectedEngine == .whisper {
-                        Picker("Model", selection: Binding(
-                            get: { whisperModelManager.selectedVariant },
-                            set: { whisperModelManager.selectedVariant = $0 }
-                        )) {
-                            ForEach(WhisperModelVariant.allCases) { variant in
-                                Text("\(variant.title) (\(variant.sizeDescription))").tag(variant)
-                            }
-                        }
-                        .labelsHidden()
-                        .disabled(isModelBusy)
+                    whisperModelStatusRow
+                }
 
-                        Text(whisperModelManager.selectedVariant.qualityDescription)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-
-                        whisperModelStatusRow
-                    }
-
-                    if selectedEngine == .parakeet {
-                        fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
-                    }
+                if selectedEngine == .parakeet {
+                    fluidAudioModelStatusRow(manager: parakeetModelManager, model: .parakeet)
                 }
             }
 
-            sectionDivider()
-
-            // MARK: Microphone
-            formRow("Microphone:") {
-                Picker("Microphone", selection: microphoneSelection) {
+            Section("Microphone") {
+                Picker("Input device", selection: microphoneSelection) {
                     Text("System Default").tag("")
+                    Divider()
                     ForEach(availableMicrophones, id: \.uid) { mic in
                         Text(mic.name).tag(mic.uid)
                     }
                 }
-                .labelsHidden()
             }
 
-            sectionDivider()
-
-            // MARK: Hotkey
-            formRow("Hotkey mode:") {
+            Section("Hotkey") {
                 Picker("Mode", selection: $hotkeyModeRaw) {
                     ForEach(HotkeyMode.allCases) { mode in
                         Text(mode.title).tag(mode.rawValue)
                     }
                 }
-                .labelsHidden()
-            }
 
-            formRow("Shortcut:") {
-                HStack(spacing: 8) {
-                    HStack(spacing: 3) {
-                        ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
-                            KeyCapView(token)
+                LabeledContent("Shortcut") {
+                    HStack(spacing: 8) {
+                        HStack(spacing: 3) {
+                            ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
+                                KeyCapView(token)
+                            }
                         }
-                    }
-                    Button(hotkeyRecorder.isRecording ? "Press keys..." : "Record") {
-                        if hotkeyRecorder.isRecording {
+                        Button(hotkeyRecorder.isRecording ? "Press keys..." : "Record") {
+                            if hotkeyRecorder.isRecording {
+                                hotkeyRecorder.stop()
+                            } else {
+                                hotkeyRecorder.start()
+                            }
+                        }
+                        .controlSize(.small)
+                        Button("Reset") {
+                            hotkeyShortcut = .default
+                            hotkeyShortcut.saveToDefaults()
                             hotkeyRecorder.stop()
-                        } else {
-                            hotkeyRecorder.start()
                         }
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
-                    Button("Reset") {
-                        hotkeyShortcut = .default
-                        hotkeyShortcut.saveToDefaults()
-                        hotkeyRecorder.stop()
-                    }
-                    .controlSize(.small)
                 }
-            }
 
-            formRow("") {
                 Text(selectedHotkeyMode.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
 
-            if hotkeyRecorder.isRecording {
-                formRow("") {
+                if hotkeyRecorder.isRecording {
                     Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            sectionDivider()
-
-            // MARK: Enhancement
-            formRow("Text enhancement:") {
-                Picker("Enhancement", selection: $enhancementModeRaw) {
+            Section("Text Enhancement") {
+                Picker("Mode", selection: $enhancementModeRaw) {
                     Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
                     Text(EnhancementMode.appleIntelligence.title)
                         .tag(EnhancementMode.appleIntelligence.rawValue)
                     Text(EnhancementMode.cloudAI.title)
                         .tag(EnhancementMode.cloudAI.rawValue)
                 }
-                .labelsHidden()
-            }
 
-            if selectedEnhancementMode == .appleIntelligence {
-                if !appleIntelligenceAvailable {
-                    formRow("") {
+                if selectedEnhancementMode == .appleIntelligence {
+                    if !appleIntelligenceAvailable {
                         Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                } else if selectedEngine != .dictation {
-                    formRow("") {
+                    } else if selectedEngine != .dictation {
                         Label("Apple Intelligence enhancement is only available with Direct Dictation. Use Cloud AI for Whisper/Parakeet.", systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-            }
 
-            // Cloud AI configuration
-            if selectedEnhancementMode == .cloudAI {
-                formRow("Provider:") {
+                if selectedEnhancementMode == .cloudAI {
                     Picker("Provider", selection: Binding(
                         get: { cloudProviderRaw },
                         set: { newValue in
-                            cloudProviderRaw = newValue
-                            // Reset model to the provider's default when switching
                             let provider = CloudAIProvider(rawValue: newValue) ?? .openAI
+                            cloudProviderRaw = newValue
                             cloudModelID = provider.defaultModel.id
-                            // Load existing API key for the new provider
                             apiKeyInput = KeychainManager.getAPIKey(for: provider) ?? ""
                             apiKeySaved = !apiKeyInput.isEmpty
                         }
@@ -324,24 +332,21 @@ private struct GeneralSettingsView: View {
                             Text(provider.title).tag(provider.rawValue)
                         }
                     }
-                    .labelsHidden()
-                }
 
-                formRow("Model:") {
                     Picker("Model", selection: $cloudModelID) {
                         ForEach(selectedCloudProvider.models) { model in
                             Text(model.title).tag(model.id)
                         }
                     }
-                    .labelsHidden()
-                }
 
-                formRow("API key:") {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("API key")
+
                         HStack(spacing: 8) {
                             SecureField("Enter your \(selectedCloudProvider.title) API key", text: $apiKeyInput)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 11, design: .monospaced))
+                                .frame(minWidth: 260, maxWidth: .infinity)
                                 .onChange(of: apiKeyInput) {
                                     apiKeySaved = false
                                 }
@@ -356,20 +361,19 @@ private struct GeneralSettingsView: View {
                             .disabled(apiKeyInput.isEmpty || apiKeySaved)
 
                             if KeychainManager.hasAPIKey(for: selectedCloudProvider) {
-                                Button("Remove") {
+                                Button("Remove", role: .destructive) {
                                     KeychainManager.deleteAPIKey(for: selectedCloudProvider)
                                     apiKeyInput = ""
                                     apiKeySaved = false
                                 }
                                 .controlSize(.small)
-                                .foregroundStyle(.red)
                             }
                         }
 
                         HStack(spacing: 4) {
                             Text("Stored securely in your Mac's Keychain.")
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                             if let url = selectedCloudProvider.apiKeyURL {
                                 Link("Get API key", destination: url)
                                     .font(.caption)
@@ -377,46 +381,43 @@ private struct GeneralSettingsView: View {
                         }
                     }
                 }
-            }
 
-            // System prompt editor (for Apple Intelligence and Cloud AI)
-            if (selectedEnhancementMode == .appleIntelligence && selectedEngine == .dictation)
-                || selectedEnhancementMode == .cloudAI {
-                formRow("System prompt:") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        TextEditor(text: $systemPrompt)
-                            .font(.system(size: 11, design: .monospaced))
-                            .frame(height: 80)
-                            .scrollContentBackground(.hidden)
-                            .padding(6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(.quaternary.opacity(0.5))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .strokeBorder(.quaternary, lineWidth: 1)
-                            )
+                if (selectedEnhancementMode == .appleIntelligence && selectedEngine == .dictation)
+                    || selectedEnhancementMode == .cloudAI {
+                    LabeledContent("System prompt") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextEditor(text: $systemPrompt)
+                                .font(.system(size: 11, design: .monospaced))
+                                .frame(height: 96)
+                                .scrollContentBackground(.hidden)
+                                .padding(6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(.quaternary.opacity(0.5))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(.quaternary, lineWidth: 1)
+                                )
 
-                        HStack {
-                            Text("Customise how AI enhances your transcriptions.")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                            Spacer()
-                            Button("Reset to Default") {
-                                systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
+                            HStack {
+                                Text("Customise how AI enhances your transcriptions.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Reset to Default") {
+                                    systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
+                                }
+                                .controlSize(.small)
+                                .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
                             }
-                            .controlSize(.small)
-                            .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
                         }
                     }
                 }
             }
-
-            Spacer(minLength: 20)
         }
-        .padding(.top, 12)
-        }
+        .formStyle(.grouped)
+        .contentMargins(.top, 8, for: .scrollContent)
         .onDisappear {
             hotkeyRecorder.stop()
             audioDeviceObserver.stop()
@@ -432,7 +433,6 @@ private struct GeneralSettingsView: View {
                 refreshAvailableMicrophones()
             }
             audioDeviceObserver.start()
-            // Load existing API key for the current provider
             apiKeyInput = KeychainManager.getAPIKey(for: selectedCloudProvider) ?? ""
             apiKeySaved = !apiKeyInput.isEmpty
         }
@@ -701,9 +701,8 @@ private struct ControlsSettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // MARK: System
-            formRow("Launch at login:") {
+        Form {
+            Section("System") {
                 Toggle(isOn: Binding(
                     get: { SMAppService.mainApp.status == .enabled },
                     set: { newValue in
@@ -718,84 +717,74 @@ private struct ControlsSettingsView: View {
                         }
                     }
                 )) {
-                    Text("Start Kaze when you log in")
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-
-            sectionDivider()
-
-            // MARK: Output
-            formRow("Trailing space:") {
-                Toggle(isOn: $appendTrailingSpace) {
-                    Text("Append a space after each transcription")
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-
-            formRow("Filler words:") {
-                Toggle(isOn: $removeFillerWords) {
-                    Text("Remove filler words (uh, um, er, hmm, ...)")
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-
-            formRow("") {
-                Text("Automatically strips hesitation sounds like \"uh\", \"um\", \"hmm\", and similar fillers from transcriptions before pasting.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            sectionDivider()
-
-            // MARK: Smart Formatting (Experimental)
-            formRow("Smart formatting:") {
-                Toggle(isOn: $smartFormattingEnabled) {
-                    HStack(spacing: 4) {
-                        Text("Auto-detect paragraphs and lists")
-                        Text("Experimental")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(
-                                Capsule()
-                                    .fill(.orange.opacity(0.15))
-                            )
-                            .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start Kaze when you log in")
+                        Text("Kaze will be ready automatically after you sign in.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .toggleStyle(.switch)
-                .controlSize(.small)
             }
 
-            if smartFormattingEnabled {
-                formRow("Formatting backend:") {
-                    Picker("Backend", selection: $formattingBackendRaw) {
+            Section("Output") {
+                Toggle(isOn: $appendTrailingSpace) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Append a space after each transcription")
+                        Text("Useful when dictating continuously into editors or chat fields.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                Toggle(isOn: $removeFillerWords) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Remove filler words")
+                        Text("Strips hesitation sounds like \"uh\", \"um\", \"hmm\", and similar fillers before pasting.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+
+            Section("Smart Formatting") {
+                Toggle(isOn: $smartFormattingEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Auto-detect paragraphs and lists")
+                            Text("Experimental")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.orange.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.orange)
+                        }
+
+                        Text("Uses AI to add line breaks, paragraphs, bullets, and numbered lists from spoken cues.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if smartFormattingEnabled {
+                    Picker("Formatting backend", selection: $formattingBackendRaw) {
                         ForEach(FormattingBackend.allCases) { backend in
                             Text(backend.title).tag(backend.rawValue)
                         }
                     }
-                    .labelsHidden()
-                }
-            }
 
-            formRow("") {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Uses AI to add line breaks, paragraphs, and bullet/numbered lists to your transcriptions. Spoken cues like \"new line\" or \"bullet point\" are converted into actual formatting.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if smartFormattingEnabled && !smartFormattingAvailable {
+                    if !smartFormattingAvailable {
                         let backend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
                         if backend == .appleIntelligence {
                             Label("Requires macOS 26 with Apple Intelligence enabled.", systemImage: "info.circle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Label("Configure your Cloud AI provider and API key in the General tab first.", systemImage: "info.circle")
+                            Label("Configure your Cloud AI provider and API key in General first.", systemImage: "info.circle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -803,27 +792,19 @@ private struct ControlsSettingsView: View {
                 }
             }
 
-            sectionDivider()
-
-            // MARK: Appearance
-            formRow("Notch mode:") {
+            Section("Appearance") {
                 Toggle(isOn: $notchMode) {
-                    Text("Dynamic Island style")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Dynamic Island style")
+                        Text("Show the recording indicator near the MacBook notch. When off, Kaze uses a floating pill at the bottom.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .toggleStyle(.switch)
-                .controlSize(.small)
             }
 
-            formRow("") {
-                Text("Show the recording indicator at the top of the screen, like a Dynamic Island around the MacBook notch. When off, a floating pill appears at the bottom.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            sectionDivider()
-
-            // MARK: Updates
-            formRow("Auto-update:") {
+            Section("Updates") {
                 Toggle(isOn: Binding(
                     get: { updaterManager.automaticallyChecksForUpdates },
                     set: { updaterManager.automaticallyChecksForUpdates = $0 }
@@ -831,20 +812,15 @@ private struct ControlsSettingsView: View {
                     Text("Automatically check for updates")
                 }
                 .toggleStyle(.switch)
-                .controlSize(.small)
-            }
 
-            formRow("") {
                 Button("Check for Updates…") {
                     updaterManager.checkForUpdates()
                 }
-                .controlSize(.small)
                 .disabled(!updaterManager.canCheckForUpdates)
             }
-
-            Spacer()
         }
-        .padding(.top, 12)
+        .formStyle(.grouped)
+        .contentMargins(.top, 8, for: .scrollContent)
     }
 }
 
@@ -924,7 +900,7 @@ private struct StatsSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 18)
+                .padding(.top, 8)
 
                 LazyVGrid(columns: metricColumns, spacing: 12) {
                     StatsMetricCard(
@@ -955,6 +931,7 @@ private struct StatsSettingsView: View {
                     .padding(.bottom, 20)
             }
         }
+        .contentMargins(.top, 8, for: .scrollContent)
     }
 
     private var topSourcesSection: some View {
@@ -1352,7 +1329,7 @@ private struct VocabularySettingsView: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 14)
+            .padding(.top, 8)
             .padding(.bottom, 10)
 
             Divider()
@@ -1436,25 +1413,22 @@ private struct DebugSettingsView: View {
     let restartOnboarding: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                formRow("Onboarding:") {
+        Form {
+            Section("Onboarding") {
+                VStack(alignment: .leading, spacing: 8) {
                     Button("Restart Onboarding") {
                         restartOnboarding()
                     }
                     .buttonStyle(.borderedProminent)
-                }
 
-                formRow("") {
                     Text("Reopens the first-launch onboarding flow for testing.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
-                Spacer(minLength: 20)
             }
-            .padding(.top, 12)
         }
+        .formStyle(.grouped)
+        .contentMargins(.top, 8, for: .scrollContent)
     }
 }
 
@@ -1498,30 +1472,6 @@ class AudioDeviceObserver: ObservableObject {
     deinit {
         stop()
     }
-}
-
-// MARK: - Shared Form Helpers
-
-private let formLabelWidth: CGFloat = 140
-
-private func formRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(label)
-            .font(.system(size: 13))
-            .foregroundStyle(.primary)
-            .frame(width: formLabelWidth, alignment: .trailing)
-
-        content()
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .padding(.horizontal, 20)
-    .padding(.vertical, 4)
-}
-
-private func sectionDivider() -> some View {
-    Divider()
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
 }
 
 // MARK: - About View

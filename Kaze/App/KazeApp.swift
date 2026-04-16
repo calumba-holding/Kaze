@@ -17,8 +17,9 @@ struct KazeApp: App {
                 updaterManager: appDelegate.updaterManager,
                 restartOnboarding: appDelegate.restartOnboarding
             )
-            .frame(width: 620, height: 680)
+            .frame(width: 760, height: 640)
         }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -435,19 +436,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 updaterManager: self.updaterManager,
                 restartOnboarding: self.restartOnboarding
             )
-            .frame(width: 520, height: 600)
+            .frame(width: 760, height: 640)
             let hostingController = NSHostingController(rootView: contentView)
 
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 500, height: 800),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 640),
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
-            window.minSize = NSSize(width: 500, height: 800)
-            window.maxSize = NSSize(width: 500, height: 800)
+            window.minSize = NSSize(width: 760, height: 640)
+            window.maxSize = NSSize(width: 760, height: 640)
             window.center()
-            window.title = "Kaze Settings"
+            window.title = "Settings"
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isMovableByWindowBackground = true
             window.contentViewController = hostingController
             window.isReleasedWhenClosed = false
             window.delegate = self
