@@ -7,15 +7,27 @@ import os
 /// Supports two modes:
 /// - **Hold to Talk**: Press and hold both keys → `onKeyDown`; release either → `onKeyUp`
 /// - **Toggle**: First press of combo → `onKeyDown`; second press → `onKeyUp`
+/// - **Hybrid**: Hold to talk, or double-press to toggle recording on/off.
 @MainActor
 class HotkeyManager {
     var onKeyDown: (() -> Void)?
     var onKeyUp: (() -> Void)?
 
     /// The current hotkey mode. Can be changed at runtime.
-    var mode: HotkeyMode = .holdToTalk
+    var mode: HotkeyMode = .holdToTalk {
+        didSet {
+            if oldValue != mode {
+                resetInteractionState()
+            }
+        }
+    }
     var shortcut: HotkeyShortcut = .default {
-        didSet { updateFilterSnapshot() }
+        didSet {
+            updateFilterSnapshot()
+            if oldValue != shortcut {
+                resetInteractionState()
+            }
+        }
     }
 
     private var eventTap: CFMachPort?
@@ -24,6 +36,13 @@ class HotkeyManager {
 
     /// Tracks whether a toggle session is active (only used in toggle mode).
     private var isToggleActive = false
+    private var isHybridToggleActive = false
+    private var hybridPressStartedAt: Date?
+    private var hybridTogglePressAt: Date?
+    private var hybridPendingStopTask: Task<Void, Never>?
+    private var shouldIgnoreNextHybridRelease = false
+
+    private static let hybridDoublePressInterval: TimeInterval = 0.30
 
     /// `true` if the event tap was successfully created (i.e. Accessibility permission is granted).
     private(set) var isAccessibilityGranted = false
@@ -171,6 +190,7 @@ class HotkeyManager {
         }
         eventTap = nil
         runLoopSource = nil
+        resetInteractionState()
     }
 
     /// Called from the CGEvent tap callback after the early filter passes.
@@ -193,33 +213,10 @@ class HotkeyManager {
         guard type == .flagsChanged else { return }
         let comboIsDown = shortcut.matchesExactModifiers(event.flags)
 
-        switch mode {
-        case .holdToTalk:
-            if comboIsDown && !isKeyDown {
-                isKeyDown = true
-                onKeyDown?()
-            } else if !comboIsDown && isKeyDown {
-                isKeyDown = false
-                onKeyUp?()
-            }
-
-        case .toggle:
-            // Detect the rising edge: combo was not pressed, now it is
-            if comboIsDown && !isKeyDown {
-                isKeyDown = true
-                if !isToggleActive {
-                    // First press: start recording
-                    isToggleActive = true
-                    onKeyDown?()
-                } else {
-                    // Second press: stop recording
-                    isToggleActive = false
-                    onKeyUp?()
-                }
-            } else if !comboIsDown && isKeyDown {
-                // Keys released — just reset the edge detector, don't fire callbacks
-                isKeyDown = false
-            }
+        if comboIsDown && !isKeyDown {
+            handleHotkeyPress()
+        } else if !comboIsDown && isKeyDown {
+            handleHotkeyRelease()
         }
     }
 
@@ -233,43 +230,139 @@ class HotkeyManager {
             guard eventKeyCode == keyCode else { return }
             guard shortcut.matchesExactModifiers(event.flags) else { return }
 
-            switch mode {
-            case .holdToTalk:
-                guard !isKeyDown else { return }
-                isKeyDown = true
-                onKeyDown?()
-            case .toggle:
-                guard !isKeyDown else { return }
-                isKeyDown = true
-                if !isToggleActive {
-                    isToggleActive = true
-                    onKeyDown?()
-                } else {
-                    isToggleActive = false
-                    onKeyUp?()
-                }
-            }
+            guard !isKeyDown else { return }
+            handleHotkeyPress()
 
         case .keyUp:
             guard eventKeyCode == keyCode else { return }
-            if mode == .holdToTalk && isKeyDown {
-                isKeyDown = false
-                onKeyUp?()
-            } else if mode == .toggle {
-                isKeyDown = false
-            }
+            guard isKeyDown else { return }
+            handleHotkeyRelease()
 
         case .flagsChanged:
             // If modifier state changes while the key is held in hold mode,
             // stop as soon as the configured modifiers are no longer held.
-            guard mode == .holdToTalk, isKeyDown else { return }
+            guard (mode == .holdToTalk || mode == .hybrid), isKeyDown else { return }
             if !shortcut.matchesExactModifiers(event.flags) {
-                isKeyDown = false
-                onKeyUp?()
+                handleHotkeyRelease()
             }
 
         default:
             return
         }
+    }
+
+    private func handleHotkeyPress() {
+        switch mode {
+        case .holdToTalk:
+            isKeyDown = true
+            onKeyDown?()
+
+        case .toggle:
+            isKeyDown = true
+            if !isToggleActive {
+                isToggleActive = true
+                onKeyDown?()
+            } else {
+                isToggleActive = false
+                onKeyUp?()
+            }
+
+        case .hybrid:
+            handleHybridPress()
+        }
+    }
+
+    private func handleHotkeyRelease() {
+        switch mode {
+        case .holdToTalk:
+            isKeyDown = false
+            onKeyUp?()
+
+        case .toggle:
+            isKeyDown = false
+
+        case .hybrid:
+            handleHybridRelease()
+        }
+    }
+
+    private func handleHybridPress() {
+        let now = Date()
+        isKeyDown = true
+        hybridPressStartedAt = now
+
+        if isHybridToggleActive {
+            if let previousPress = hybridTogglePressAt,
+               now.timeIntervalSince(previousPress) <= Self.hybridDoublePressInterval {
+                hybridTogglePressAt = nil
+                isHybridToggleActive = false
+                shouldIgnoreNextHybridRelease = true
+                onKeyUp?()
+            } else {
+                hybridTogglePressAt = now
+            }
+            return
+        }
+
+        if hybridPendingStopTask != nil {
+            cancelHybridPendingStop()
+            isHybridToggleActive = true
+            hybridTogglePressAt = nil
+            return
+        }
+
+        onKeyDown?()
+    }
+
+    private func handleHybridRelease() {
+        isKeyDown = false
+
+        if shouldIgnoreNextHybridRelease {
+            shouldIgnoreNextHybridRelease = false
+            hybridPressStartedAt = nil
+            return
+        }
+
+        if isHybridToggleActive {
+            hybridPressStartedAt = nil
+            return
+        }
+
+        let now = Date()
+        let pressDuration = hybridPressStartedAt.map { now.timeIntervalSince($0) } ?? Self.hybridDoublePressInterval
+        hybridPressStartedAt = nil
+
+        if pressDuration >= Self.hybridDoublePressInterval {
+            onKeyUp?()
+        } else {
+            scheduleHybridPendingStop()
+        }
+    }
+
+    private func scheduleHybridPendingStop() {
+        cancelHybridPendingStop()
+        let nanoseconds = UInt64(Self.hybridDoublePressInterval * 1_000_000_000)
+        hybridPendingStopTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            self.hybridPendingStopTask = nil
+            guard !self.isHybridToggleActive else { return }
+            self.onKeyUp?()
+        }
+    }
+
+    private func cancelHybridPendingStop() {
+        hybridPendingStopTask?.cancel()
+        hybridPendingStopTask = nil
+    }
+
+    private func resetInteractionState() {
+        cancelHybridPendingStop()
+        isKeyDown = false
+        isToggleActive = false
+        isHybridToggleActive = false
+        hybridPressStartedAt = nil
+        hybridTogglePressAt = nil
+        shouldIgnoreNextHybridRelease = false
     }
 }

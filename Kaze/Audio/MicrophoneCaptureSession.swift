@@ -15,7 +15,7 @@ enum MicrophoneCaptureError: LocalizedError {
             return "The selected microphone is unavailable."
         case .inputCreationFailed:
             return "Kaze could not create a capture input for the selected microphone."
-        case .outputCreationFailed:
+        case .outputCreationFailed: 
             return "Kaze could not create a capture output for the selected microphone."
         case .unsupportedAudioFormat:
             return "Kaze received an unsupported audio format from the microphone."

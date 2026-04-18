@@ -78,6 +78,7 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
 enum HotkeyMode: String, CaseIterable, Identifiable {
     case holdToTalk
     case toggle
+    case hybrid
 
     var id: String { rawValue }
 
@@ -85,6 +86,7 @@ enum HotkeyMode: String, CaseIterable, Identifiable {
         switch self {
         case .holdToTalk: return "Hold to Talk"
         case .toggle: return "Press to Toggle"
+        case .hybrid: return "Hybrid"
         }
     }
 
@@ -92,6 +94,7 @@ enum HotkeyMode: String, CaseIterable, Identifiable {
         switch self {
         case .holdToTalk: return "Hold the hotkey to record, release to stop."
         case .toggle: return "Press the hotkey once to start, press again to stop."
+        case .hybrid: return "Hold the hotkey to record, or double-press it to toggle recording on and off."
         }
     }
 }

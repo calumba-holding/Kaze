@@ -6,13 +6,15 @@ import ServiceManagement
 
 // MARK: - Settings Tab Enum
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
+enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case controls
+    case output
     case vocabulary
     case stats
     case history
     case debug
+    case about
 
     var id: Self { self }
 
@@ -20,10 +22,12 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .controls: return "Controls"
+        case .output: return "Output"
         case .vocabulary: return "Vocabulary"
         case .stats: return "Stats"
         case .history: return "History"
         case .debug: return "Debug"
+        case .about: return "About"
         }
     }
 
@@ -31,12 +35,22 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "gearshape"
         case .controls: return "slider.horizontal.3"
+        case .output: return "pencil.line"
         case .vocabulary: return "text.book.closed"
         case .stats: return "chart.bar.xaxis"
         case .history: return "clock.arrow.circlepath"
         case .debug: return "ladybug"
+        case .about: return "info.circle"
         }
     }
+}
+
+private enum AppVersion {
+    static let displayString: String = {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
+        return "Version \(version) (\(build))"
+    }()
 }
 
 // MARK: - Root View
@@ -51,17 +65,39 @@ struct ContentView: View {
 
     @State private var selectedTab: SettingsTab? = .general
 
+    init(
+        whisperModelManager: WhisperModelManager,
+        parakeetModelManager: FluidAudioModelManager,
+        historyManager: TranscriptionHistoryManager,
+        customWordsManager: CustomWordsManager,
+        updaterManager: UpdaterManager,
+        restartOnboarding: @escaping () -> Void,
+        initialTab: SettingsTab = .general
+    ) {
+        self.whisperModelManager = whisperModelManager
+        self.parakeetModelManager = parakeetModelManager
+        self.historyManager = historyManager
+        self.customWordsManager = customWordsManager
+        self.updaterManager = updaterManager
+        self.restartOnboarding = restartOnboarding
+        _selectedTab = State(initialValue: initialTab)
+    }
+
     private var activeTab: SettingsTab {
         selectedTab ?? .general
     }
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsTab.allCases, selection: $selectedTab) { tab in
-                SettingsSidebarRow(tab: tab)
-                    .tag(tab)
+            VStack(spacing: 0) {
+                List(SettingsTab.allCases, selection: $selectedTab) { tab in
+                    SettingsSidebarRow(tab: tab)
+                        .tag(tab)
+                }
+                .listStyle(.sidebar)
+
+                SettingsSidebarFooter()
             }
-            .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(190)
         } detail: {
             settingsDetail(for: activeTab)
@@ -69,7 +105,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .navigationSplitViewStyle(.balanced)
-        .toolbar(.hidden, for: .windowToolbar)
+        .toolbar(removing: .sidebarToggle)
         .background(SettingsWindowConfigurator())
         .frame(width: 760, height: 640)
     }
@@ -83,7 +119,9 @@ struct ContentView: View {
                 parakeetModelManager: parakeetModelManager
             )
         case .controls:
-            ControlsSettingsView(updaterManager: updaterManager)
+            ControlsSettingsView()
+        case .output:
+            OutputSettingsView()
         case .vocabulary:
             VocabularySettingsView(customWordsManager: customWordsManager)
         case .stats:
@@ -92,6 +130,8 @@ struct ContentView: View {
             HistorySettingsView(historyManager: historyManager)
         case .debug:
             DebugSettingsView(restartOnboarding: restartOnboarding)
+        case .about:
+            AboutSettingsView(updaterManager: updaterManager)
         }
     }
 }
@@ -128,6 +168,17 @@ private struct SettingsSidebarRow: View {
     }
 }
 
+private struct SettingsSidebarFooter: View {
+    var body: some View {
+        Text(AppVersion.displayString)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+    }
+}
+
 private struct SettingsWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -150,6 +201,40 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.styleMask.insert(.fullSizeContentView)
         window.isMovableByWindowBackground = true
+        removeSidebarToggleWhenAvailable(from: window)
+    }
+
+    private func removeSidebarToggleWhenAvailable(from window: NSWindow) {
+        removeSidebarToggle(from: window)
+
+        for delay in [0.0, 0.05, 0.15, 0.35, 0.75] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                removeSidebarToggle(from: window)
+            }
+        }
+    }
+
+    private func removeSidebarToggle(from window: NSWindow) {
+        guard let toolbar = window.toolbar else { return }
+
+        for index in toolbar.items.indices.reversed() {
+            let item = toolbar.items[index]
+            let searchableText = [
+                item.itemIdentifier.rawValue,
+                item.label,
+                item.paletteLabel,
+                item.toolTip,
+                item.view?.accessibilityLabel(),
+                item.view?.accessibilityHelp()
+            ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+
+            if searchableText.contains("sidebar") {
+                toolbar.removeItem(at: index)
+            }
+        }
     }
 }
 
@@ -157,28 +242,15 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
 
 private struct GeneralSettingsView: View {
     @AppStorage(AppPreferenceKey.transcriptionEngine) private var engineRaw = TranscriptionEngine.dictation.rawValue
-    @AppStorage(AppPreferenceKey.enhancementMode) private var enhancementModeRaw = EnhancementMode.off.rawValue
-    @AppStorage(AppPreferenceKey.enhancementSystemPrompt) private var systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
-    @AppStorage(AppPreferenceKey.cloudAIProvider) private var cloudProviderRaw = CloudAIProvider.openAI.rawValue
-    @AppStorage(AppPreferenceKey.cloudAIModel) private var cloudModelID = CloudAIProvider.openAI.defaultModel.id
-    @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
     @AppStorage(AppPreferenceKey.selectedMicrophoneID) private var selectedMicrophoneID = ""
-    @State private var hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
     @State private var availableMicrophones: [AudioInputDevice] = []
-    @State private var apiKeyInput = ""
-    @State private var apiKeySaved = false
     @StateObject private var audioDeviceObserver = AudioDeviceObserver()
-    @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
 
     private var selectedEngine: TranscriptionEngine {
         TranscriptionEngine(rawValue: engineRaw) ?? .dictation
-    }
-
-    private var selectedHotkeyMode: HotkeyMode {
-        HotkeyMode(rawValue: hotkeyModeRaw) ?? .holdToTalk
     }
 
     private var microphoneSelection: Binding<String> {
@@ -191,21 +263,6 @@ private struct GeneralSettingsView: View {
                 selectedMicrophoneID = newValue
             }
         )
-    }
-
-    private var appleIntelligenceAvailable: Bool {
-        if #available(macOS 26.0, *) {
-            return TextEnhancer.isAvailable
-        }
-        return false
-    }
-
-    private var selectedCloudProvider: CloudAIProvider {
-        CloudAIProvider(rawValue: cloudProviderRaw) ?? .openAI
-    }
-
-    private var selectedEnhancementMode: EnhancementMode {
-        EnhancementMode(rawValue: enhancementModeRaw) ?? .off
     }
 
     var body: some View {
@@ -254,187 +311,42 @@ private struct GeneralSettingsView: View {
                 }
             }
 
-            Section("Hotkey") {
-                Picker("Mode", selection: $hotkeyModeRaw) {
-                    ForEach(HotkeyMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
-                    }
-                }
-
-                LabeledContent("Shortcut") {
-                    HStack(spacing: 8) {
-                        HStack(spacing: 3) {
-                            ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
-                                KeyCapView(token)
-                            }
-                        }
-                        Button(hotkeyRecorder.isRecording ? "Press keys..." : "Record") {
-                            if hotkeyRecorder.isRecording {
-                                hotkeyRecorder.stop()
+            Section("System") {
+                Toggle(isOn: Binding(
+                    get: { SMAppService.mainApp.status == .enabled },
+                    set: { newValue in
+                        do {
+                            if newValue {
+                                try SMAppService.mainApp.register()
                             } else {
-                                hotkeyRecorder.start()
+                                try SMAppService.mainApp.unregister()
                             }
+                        } catch {
+                            print("Launch at login toggle failed: \(error)")
                         }
-                        .controlSize(.small)
-                        Button("Reset") {
-                            hotkeyShortcut = .default
-                            hotkeyShortcut.saveToDefaults()
-                            hotkeyRecorder.stop()
-                        }
-                        .controlSize(.small)
                     }
-                }
-
-                Text(selectedHotkeyMode.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if hotkeyRecorder.isRecording {
-                    Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Text Enhancement") {
-                Picker("Mode", selection: $enhancementModeRaw) {
-                    Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
-                    Text(EnhancementMode.appleIntelligence.title)
-                        .tag(EnhancementMode.appleIntelligence.rawValue)
-                    Text(EnhancementMode.cloudAI.title)
-                        .tag(EnhancementMode.cloudAI.rawValue)
-                }
-
-                if selectedEnhancementMode == .appleIntelligence {
-                    if !appleIntelligenceAvailable {
-                        Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if selectedEngine != .dictation {
-                        Label("Apple Intelligence enhancement is only available with Direct Dictation. Use Cloud AI for Whisper/Parakeet.", systemImage: "info.circle")
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Start Kaze when you log in")
+                        Text("Kaze will be ready automatically after you sign in.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                if selectedEnhancementMode == .cloudAI {
-                    Picker("Provider", selection: Binding(
-                        get: { cloudProviderRaw },
-                        set: { newValue in
-                            let provider = CloudAIProvider(rawValue: newValue) ?? .openAI
-                            cloudProviderRaw = newValue
-                            cloudModelID = provider.defaultModel.id
-                            apiKeyInput = KeychainManager.getAPIKey(for: provider) ?? ""
-                            apiKeySaved = !apiKeyInput.isEmpty
-                        }
-                    )) {
-                        ForEach(CloudAIProvider.allCases) { provider in
-                            Text(provider.title).tag(provider.rawValue)
-                        }
-                    }
-
-                    Picker("Model", selection: $cloudModelID) {
-                        ForEach(selectedCloudProvider.models) { model in
-                            Text(model.title).tag(model.id)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("API key")
-
-                        HStack(spacing: 8) {
-                            SecureField("Enter your \(selectedCloudProvider.title) API key", text: $apiKeyInput)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(minWidth: 260, maxWidth: .infinity)
-                                .onChange(of: apiKeyInput) {
-                                    apiKeySaved = false
-                                }
-
-                            Button(apiKeySaved ? "Saved" : "Save") {
-                                if !apiKeyInput.isEmpty {
-                                    KeychainManager.saveAPIKey(apiKeyInput, for: selectedCloudProvider)
-                                    apiKeySaved = true
-                                }
-                            }
-                            .controlSize(.small)
-                            .disabled(apiKeyInput.isEmpty || apiKeySaved)
-
-                            if KeychainManager.hasAPIKey(for: selectedCloudProvider) {
-                                Button("Remove", role: .destructive) {
-                                    KeychainManager.deleteAPIKey(for: selectedCloudProvider)
-                                    apiKeyInput = ""
-                                    apiKeySaved = false
-                                }
-                                .controlSize(.small)
-                            }
-                        }
-
-                        HStack(spacing: 4) {
-                            Text("Stored securely in your Mac's Keychain.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if let url = selectedCloudProvider.apiKeyURL {
-                                Link("Get API key", destination: url)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                }
-
-                if (selectedEnhancementMode == .appleIntelligence && selectedEngine == .dictation)
-                    || selectedEnhancementMode == .cloudAI {
-                    LabeledContent("System prompt") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextEditor(text: $systemPrompt)
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(height: 96)
-                                .scrollContentBackground(.hidden)
-                                .padding(6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .fill(.quaternary.opacity(0.5))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                        .strokeBorder(.quaternary, lineWidth: 1)
-                                )
-
-                            HStack {
-                                Text("Customise how AI enhances your transcriptions.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button("Reset to Default") {
-                                    systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
-                                }
-                                .controlSize(.small)
-                                .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
-                            }
-                        }
-                    }
-                }
+                .toggleStyle(.switch)
             }
         }
         .formStyle(.grouped)
         .contentMargins(.top, 8, for: .scrollContent)
         .onDisappear {
-            hotkeyRecorder.stop()
             audioDeviceObserver.stop()
         }
         .onAppear {
-            hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
-            hotkeyRecorder.onShortcutRecorded = { shortcut in
-                hotkeyShortcut = shortcut
-                hotkeyShortcut.saveToDefaults()
-            }
             refreshAvailableMicrophones()
             audioDeviceObserver.onChange = {
                 refreshAvailableMicrophones()
             }
             audioDeviceObserver.start()
-            apiKeyInput = KeychainManager.getAPIKey(for: selectedCloudProvider) ?? ""
-            apiKeySaved = !apiKeyInput.isEmpty
         }
     }
 
@@ -672,54 +584,64 @@ private struct GeneralSettingsView: View {
 // MARK: - Controls Settings Tab
 
 private struct ControlsSettingsView: View {
+    @AppStorage(AppPreferenceKey.hotkeyMode) private var hotkeyModeRaw = HotkeyMode.holdToTalk.rawValue
     @AppStorage(AppPreferenceKey.notchMode) private var notchMode = true
-    @AppStorage(AppPreferenceKey.appendTrailingSpace) private var appendTrailingSpace = false
-    @AppStorage(AppPreferenceKey.removeFillerWords) private var removeFillerWords = false
-    @AppStorage(AppPreferenceKey.smartFormattingEnabled) private var smartFormattingEnabled = false
-    @AppStorage(AppPreferenceKey.smartFormattingBackend) private var formattingBackendRaw = FormattingBackend.appleIntelligence.rawValue
-    @AppStorage(AppPreferenceKey.cloudAIProvider) private var cloudProviderRaw = CloudAIProvider.openAI.rawValue
-    @ObservedObject var updaterManager: UpdaterManager
+    @State private var hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
+    @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
 
-    private var appleIntelligenceAvailable: Bool {
-        if #available(macOS 26.0, *) {
-            return TextFormatter.isAvailable
-        }
-        return false
-    }
-
-    private var cloudAIConfigured: Bool {
-        let provider = CloudAIProvider(rawValue: cloudProviderRaw) ?? .openAI
-        return KeychainManager.hasAPIKey(for: provider)
-    }
-
-    private var smartFormattingAvailable: Bool {
-        let backend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
-        switch backend {
-        case .appleIntelligence: return appleIntelligenceAvailable
-        case .cloudAI: return cloudAIConfigured
-        }
+    private var selectedHotkeyMode: HotkeyMode {
+        HotkeyMode(rawValue: hotkeyModeRaw) ?? .holdToTalk
     }
 
     var body: some View {
         Form {
-            Section("System") {
-                Toggle(isOn: Binding(
-                    get: { SMAppService.mainApp.status == .enabled },
-                    set: { newValue in
-                        do {
-                            if newValue {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
-                            }
-                        } catch {
-                            print("Launch at login toggle failed: \(error)")
-                        }
+            Section("Hotkey") {
+                Picker("Mode", selection: $hotkeyModeRaw) {
+                    ForEach(HotkeyMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
                     }
-                )) {
+                }
+
+                LabeledContent("Shortcut") {
+                    HStack(spacing: 8) {
+                        HStack(spacing: 3) {
+                            ForEach(hotkeyShortcut.displayTokens, id: \.self) { token in
+                                KeyCapView(token)
+                            }
+                        }
+                        Button(hotkeyRecorder.isRecording ? "Press keys..." : "Record") {
+                            if hotkeyRecorder.isRecording {
+                                hotkeyRecorder.stop()
+                            } else {
+                                hotkeyRecorder.start()
+                            }
+                        }
+                        .controlSize(.small)
+                        Button("Reset") {
+                            hotkeyShortcut = .default
+                            hotkeyShortcut.saveToDefaults()
+                            hotkeyRecorder.stop()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+
+                Text(selectedHotkeyMode.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if hotkeyRecorder.isRecording {
+                    Text("Press a key combination with at least one modifier (⌘ ⌥ ⌃ ⇧ fn). For modifier-only shortcuts, hold modifiers then release. Press Esc to cancel.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Appearance") {
+                Toggle(isOn: $notchMode) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Start Kaze when you log in")
-                        Text("Kaze will be ready automatically after you sign in.")
+                        Text("Dynamic Island style")
+                        Text("Show the recording indicator near the MacBook notch. When off, Kaze uses a floating pill at the bottom.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -727,7 +649,76 @@ private struct ControlsSettingsView: View {
                 .toggleStyle(.switch)
             }
 
-            Section("Output") {
+        }
+        .formStyle(.grouped)
+        .contentMargins(.top, 8, for: .scrollContent)
+        .onDisappear {
+            hotkeyRecorder.stop()
+        }
+        .onAppear {
+            hotkeyShortcut = HotkeyShortcut.loadFromDefaults()
+            hotkeyRecorder.onShortcutRecorded = { shortcut in
+                hotkeyShortcut = shortcut
+                hotkeyShortcut.saveToDefaults()
+            }
+        }
+    }
+}
+
+private struct OutputSettingsView: View {
+    @AppStorage(AppPreferenceKey.transcriptionEngine) private var engineRaw = TranscriptionEngine.dictation.rawValue
+    @AppStorage(AppPreferenceKey.appendTrailingSpace) private var appendTrailingSpace = false
+    @AppStorage(AppPreferenceKey.removeFillerWords) private var removeFillerWords = false
+    @AppStorage(AppPreferenceKey.smartFormattingEnabled) private var smartFormattingEnabled = false
+    @AppStorage(AppPreferenceKey.smartFormattingBackend) private var formattingBackendRaw = FormattingBackend.appleIntelligence.rawValue
+    @AppStorage(AppPreferenceKey.enhancementMode) private var enhancementModeRaw = EnhancementMode.off.rawValue
+    @AppStorage(AppPreferenceKey.enhancementSystemPrompt) private var systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
+    @AppStorage(AppPreferenceKey.cloudAIProvider) private var cloudProviderRaw = CloudAIProvider.openAI.rawValue
+    @AppStorage(AppPreferenceKey.cloudAIModel) private var cloudModelID = CloudAIProvider.openAI.defaultModel.id
+    @State private var apiKeyInput = ""
+    @State private var apiKeySaved = false
+
+    private var selectedEngine: TranscriptionEngine {
+        TranscriptionEngine(rawValue: engineRaw) ?? .dictation
+    }
+
+    private var selectedEnhancementMode: EnhancementMode {
+        EnhancementMode(rawValue: enhancementModeRaw) ?? .off
+    }
+
+    private var selectedCloudProvider: CloudAIProvider {
+        CloudAIProvider(rawValue: cloudProviderRaw) ?? .openAI
+    }
+
+    private var textEnhancementAvailable: Bool {
+        if #available(macOS 26.0, *) {
+            return TextEnhancer.isAvailable
+        }
+        return false
+    }
+
+    private var smartFormattingAppleIntelligenceAvailable: Bool {
+        if #available(macOS 26.0, *) {
+            return TextFormatter.isAvailable
+        }
+        return false
+    }
+
+    private var cloudAIConfigured: Bool {
+        KeychainManager.hasAPIKey(for: selectedCloudProvider)
+    }
+
+    private var smartFormattingAvailable: Bool {
+        let backend = FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence
+        switch backend {
+        case .appleIntelligence: return smartFormattingAppleIntelligenceAvailable
+        case .cloudAI: return cloudAIConfigured
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section("Cleanup") {
                 Toggle(isOn: $appendTrailingSpace) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Append a space after each transcription")
@@ -784,7 +775,7 @@ private struct ControlsSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Label("Configure your Cloud AI provider and API key in General first.", systemImage: "info.circle")
+                            Label("Configure your Cloud AI provider and API key below.", systemImage: "info.circle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -792,35 +783,137 @@ private struct ControlsSettingsView: View {
                 }
             }
 
-            Section("Appearance") {
-                Toggle(isOn: $notchMode) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Dynamic Island style")
-                        Text("Show the recording indicator near the MacBook notch. When off, Kaze uses a floating pill at the bottom.")
+            Section("Text Enhancement") {
+                Picker("Mode", selection: $enhancementModeRaw) {
+                    Text(EnhancementMode.off.title).tag(EnhancementMode.off.rawValue)
+                    Text(EnhancementMode.appleIntelligence.title)
+                        .tag(EnhancementMode.appleIntelligence.rawValue)
+                    Text(EnhancementMode.cloudAI.title)
+                        .tag(EnhancementMode.cloudAI.rawValue)
+                }
+
+                if selectedEnhancementMode == .appleIntelligence {
+                    if !textEnhancementAvailable {
+                        Label("Apple Intelligence is not available on this Mac.", systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if selectedEngine != .dictation {
+                        Label("Apple Intelligence enhancement is only available with Direct Dictation. Use Cloud AI for Whisper/Parakeet.", systemImage: "info.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-                .toggleStyle(.switch)
-            }
 
-            Section("Updates") {
-                Toggle(isOn: Binding(
-                    get: { updaterManager.automaticallyChecksForUpdates },
-                    set: { updaterManager.automaticallyChecksForUpdates = $0 }
-                )) {
-                    Text("Automatically check for updates")
-                }
-                .toggleStyle(.switch)
+                if selectedEnhancementMode == .cloudAI || smartFormattingBackendUsesCloudAI {
+                    Picker("Provider", selection: Binding(
+                        get: { cloudProviderRaw },
+                        set: { newValue in
+                            let provider = CloudAIProvider(rawValue: newValue) ?? .openAI
+                            cloudProviderRaw = newValue
+                            cloudModelID = provider.defaultModel.id
+                            apiKeyInput = KeychainManager.getAPIKey(for: provider) ?? ""
+                            apiKeySaved = !apiKeyInput.isEmpty
+                        }
+                    )) {
+                        ForEach(CloudAIProvider.allCases) { provider in
+                            Text(provider.title).tag(provider.rawValue)
+                        }
+                    }
 
-                Button("Check for Updates…") {
-                    updaterManager.checkForUpdates()
+                    Picker("Model", selection: $cloudModelID) {
+                        ForEach(selectedCloudProvider.models) { model in
+                            Text(model.title).tag(model.id)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("API key")
+
+                        HStack(spacing: 8) {
+                            SecureField("Enter your \(selectedCloudProvider.title) API key", text: $apiKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11, design: .monospaced))
+                                .frame(minWidth: 260, maxWidth: .infinity)
+                                .onChange(of: apiKeyInput) {
+                                    apiKeySaved = false
+                                }
+
+                            Button(apiKeySaved ? "Saved" : "Save") {
+                                if !apiKeyInput.isEmpty {
+                                    KeychainManager.saveAPIKey(apiKeyInput, for: selectedCloudProvider)
+                                    apiKeySaved = true
+                                }
+                            }
+                            .controlSize(.small)
+                            .disabled(apiKeyInput.isEmpty || apiKeySaved)
+
+                            if KeychainManager.hasAPIKey(for: selectedCloudProvider) {
+                                Button("Remove", role: .destructive) {
+                                    KeychainManager.deleteAPIKey(for: selectedCloudProvider)
+                                    apiKeyInput = ""
+                                    apiKeySaved = false
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+
+                        HStack(spacing: 4) {
+                            Text("Stored securely in your Mac's Keychain.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let url = selectedCloudProvider.apiKeyURL {
+                                Link("Get API key", destination: url)
+                                    .font(.caption)
+                            }
+                        }
+                    }
                 }
-                .disabled(!updaterManager.canCheckForUpdates)
+
+                if (selectedEnhancementMode == .appleIntelligence && selectedEngine == .dictation)
+                    || selectedEnhancementMode == .cloudAI {
+                    LabeledContent("System prompt") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextEditor(text: $systemPrompt)
+                                .font(.system(size: 11, design: .monospaced))
+                                .frame(height: 96)
+                                .scrollContentBackground(.hidden)
+                                .padding(6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(.quaternary.opacity(0.5))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(.quaternary, lineWidth: 1)
+                                )
+
+                            HStack {
+                                Text("Customise how AI enhances your transcriptions.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Reset to Default") {
+                                    systemPrompt = AppPreferenceKey.defaultEnhancementPrompt
+                                }
+                                .controlSize(.small)
+                                .disabled(systemPrompt == AppPreferenceKey.defaultEnhancementPrompt)
+                            }
+                        }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
         .contentMargins(.top, 8, for: .scrollContent)
+        .onAppear {
+            apiKeyInput = KeychainManager.getAPIKey(for: selectedCloudProvider) ?? ""
+            apiKeySaved = !apiKeyInput.isEmpty
+        }
+    }
+
+    private var smartFormattingBackendUsesCloudAI: Bool {
+        smartFormattingEnabled
+            && (FormattingBackend(rawValue: formattingBackendRaw) ?? .appleIntelligence) == .cloudAI
     }
 }
 
@@ -1474,100 +1567,118 @@ class AudioDeviceObserver: ObservableObject {
     }
 }
 
-// MARK: - About View
+// MARK: - About Settings
 
-struct AboutView: View {
-    private let appVersion: String = {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        return "v\(version) (\(build))"
-    }()
-
+private struct AboutSettingsView: View {
+    @ObservedObject var updaterManager: UpdaterManager
     @State private var avatarImage: NSImage?
 
     var body: some View {
-        VStack(spacing: 12) {
-            if let icon = NSImage(named: "kaze-icon") {
-                Image(nsImage: icon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 64, height: 64)
-            } else {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.secondary)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .center, spacing: 16) {
+                    appIcon
 
-            Text("Kaze")
-                .font(.title2.bold())
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Kaze")
+                            .font(.largeTitle.bold())
 
-            Text(appVersion)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                        Text(AppVersion.displayString)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
-            Text("Speech-to-text, entirely on-device.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                        Text("Speech-to-text dictation for macOS.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
-            Divider()
-                .padding(.horizontal, 40)
+                Divider()
 
-            // Made by
-            VStack(spacing: 6) {
-                Text("Created by")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Updates")
+                        .font(.headline)
 
-                Button {
-                    NSWorkspace.shared.open(URL(string: "https://x.com/fayazara")!)
-                } label: {
-                    HStack(spacing: 6) {
-                        if let avatarImage {
-                            Image(nsImage: avatarImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 20, height: 20)
-                                .clipShape(Circle())
+                    Toggle(isOn: Binding(
+                        get: { updaterManager.automaticallyChecksForUpdates },
+                        set: { updaterManager.automaticallyChecksForUpdates = $0 }
+                    )) {
+                        Text("Automatically check for updates")
+                    }
+                    .toggleStyle(.switch)
+
+                    Button("Check for Updates…") {
+                        updaterManager.checkForUpdates()
+                    }
+                    .disabled(!updaterManager.canCheckForUpdates)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Follow")
+                        .font(.headline)
+
+                    Text("Follow Fayaz on Twitter for Kaze updates, release notes, and development notes.")
+                        .foregroundStyle(.secondary)
+
+                    Link(destination: URL(string: "https://x.com/fayazara")!) {
+                        HStack(spacing: 8) {
+                            if let avatarImage {
+                                Image(nsImage: avatarImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: 24, height: 24)
+                                    .clipShape(Circle())
+                            }
+
+                            Text("Follow Fayaz on Twitter")
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Text("Fayaz Ahmed")
-                            .font(.caption)
                     }
                 }
-                .buttonStyle(.plain)
-                .onHover { hovering in
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Project")
+                        .font(.headline)
+
+                    HStack(spacing: 10) {
+                        Link("GitHub", destination: URL(string: "https://github.com/fayazara/Kaze")!)
+                        Link("Releases", destination: URL(string: "https://github.com/fayazara/Kaze/releases")!)
                     }
+                    .controlSize(.small)
+
+                    Text("MIT License")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .task {
-                await loadAvatar()
-            }
-
-            Divider()
-                .padding(.horizontal, 40)
-
-            HStack(spacing: 16) {
-                Button("GitHub") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/fayazara/Kaze")!)
-                }
-                .controlSize(.small)
-
-                Button("Releases") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/fayazara/Kaze/releases")!)
-                }
-                .controlSize(.small)
-            }
-
-            Text("MIT License")
-                .font(.caption2)
-                .foregroundStyle(.quaternary)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 520, alignment: .leading)
         }
-        .padding(.vertical, 20)
-        .padding(.horizontal, 40)
-        .frame(width: 300)
+        .contentMargins(.top, 8, for: .scrollContent)
+        .task {
+            await loadAvatar()
+        }
+    }
+
+    @ViewBuilder
+    private var appIcon: some View {
+        if let icon = NSImage(named: "kaze-icon") {
+            Image(nsImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 72, height: 72)
+        } else {
+            Image(systemName: "waveform.circle.fill")
+                .font(.system(size: 64))
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func loadAvatar() async {
@@ -1578,7 +1689,7 @@ struct AboutView: View {
                 await MainActor.run { avatarImage = image }
             }
         } catch {
-            // Silently fail — the about view works fine without the avatar
+            // The about page works fine without the remote avatar.
         }
     }
 }

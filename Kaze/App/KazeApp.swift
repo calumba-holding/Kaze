@@ -213,8 +213,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func updateStatusBarIcon() {
         guard let button = statusItem?.button else { return }
-        let isDark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let iconName = isDark ? "kaze-icon" : "kaze-icon-black"
+        let iconName = "kaze-icon"
 
         // Guard against redundant updates to break the KVO feedback loop:
         // setting button.image triggers an AppKit redraw which fires the
@@ -223,12 +222,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard iconName != lastAppliedIconName else { return }
         lastAppliedIconName = iconName
 
-        if let icon = NSImage(named: iconName) {
+        if let icon = NSImage(named: iconName)?.copy() as? NSImage {
             icon.size = NSSize(width: 18, height: 18)
+            icon.isTemplate = true
             button.image = icon
         } else {
-            button.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Kaze")
+            let fallback = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Kaze")
+            fallback?.isTemplate = true
+            button.image = fallback
         }
+        button.imagePosition = .imageOnly
         button.image?.accessibilityDescription = "Kaze"
     }
 
@@ -253,35 +256,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem?.menu = menu
     }
 
-    private var aboutWindowController: NSWindowController?
-
     @objc private func showAbout() {
-        presentManagedWindow {
-            if let window = self.aboutWindowController?.window {
-                self.bringWindowToFront(window)
-                return
-            }
-
-            let aboutView = AboutView()
-            let hostingController = NSHostingController(rootView: aboutView)
-
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 300, height: 310),
-                styleMask: [.titled, .closable],
-                backing: .buffered,
-                defer: false
-            )
-            window.center()
-            window.title = "About Kaze"
-            window.contentViewController = hostingController
-            window.isReleasedWhenClosed = false
-            window.delegate = self
-
-            let controller = NSWindowController(window: window)
-            self.aboutWindowController = controller
-            controller.showWindow(nil)
-            self.bringWindowToFront(window)
-        }
+        openSettingsWindow(initialTab: .about)
     }
 
     private func observeModelState() {
@@ -339,7 +315,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.length = NSStatusItem.squareLength
         button.attributedTitle = NSAttributedString(string: "")
         button.alphaValue = shouldMuteIcon ? 0.45 : 1.0
-        button.contentTintColor = shouldMuteIcon ? NSColor.tertiaryLabelColor : nil
+        button.contentTintColor = nil
     }
 
     private func showOnboarding() {
@@ -421,22 +397,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func openSettings() {
+        openSettingsWindow(initialTab: .general)
+    }
+
+    private func openSettingsWindow(initialTab: SettingsTab) {
         presentManagedWindow {
             if let window = self.settingsWindowController?.window {
+                if let hostingController = window.contentViewController as? NSHostingController<AnyView> {
+                    hostingController.rootView = self.makeSettingsContent(initialTab: initialTab)
+                }
                 self.settingsWindowController?.showWindow(nil)
                 self.bringWindowToFront(window)
                 return
             }
 
-            let contentView = ContentView(
-                whisperModelManager: self.whisperModelManager,
-                parakeetModelManager: self.parakeetModelManager,
-                historyManager: self.historyManager,
-                customWordsManager: self.customWordsManager,
-                updaterManager: self.updaterManager,
-                restartOnboarding: self.restartOnboarding
-            )
-            .frame(width: 760, height: 640)
+            let contentView = self.makeSettingsContent(initialTab: initialTab)
             let hostingController = NSHostingController(rootView: contentView)
 
             let window = NSWindow(
@@ -463,6 +438,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func makeSettingsContent(initialTab: SettingsTab) -> AnyView {
+        AnyView(ContentView(
+            whisperModelManager: whisperModelManager,
+            parakeetModelManager: parakeetModelManager,
+            historyManager: historyManager,
+            customWordsManager: customWordsManager,
+            updaterManager: updaterManager,
+            restartOnboarding: restartOnboarding,
+            initialTab: initialTab
+        )
+        .frame(width: 760, height: 640))
+    }
+
     private func presentManagedWindow(_ action: @escaping () -> Void) {
         DispatchQueue.main.async {
             NSApp.setActivationPolicy(.regular)
@@ -485,12 +473,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if onboardingWindowController?.window === window {
             onboardingWindowController = nil
         }
-        if aboutWindowController?.window === window {
-            aboutWindowController = nil
-        }
 
         // If no managed windows remain visible, revert to accessory (no dock icon)
-        let hasVisibleWindow = [settingsWindowController, onboardingWindowController, aboutWindowController]
+        let hasVisibleWindow = [settingsWindowController, onboardingWindowController]
             .compactMap { $0?.window }
             .contains { $0.isVisible }
         if !hasVisibleWindow {
