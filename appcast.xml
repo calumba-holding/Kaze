@@ -20,6 +20,28 @@
     -->
 
     <item>
+      <title>Version 0.81</title>
+      <sparkle:version>13</sparkle:version>
+      <sparkle:shortVersionString>0.81</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <pubDate>Mon, 20 Apr 2026 16:55:00 +0000</pubDate>
+      <description><![CDATA[
+        <h2>What's New in 0.81</h2>
+        <ul>
+          <li>- Fix icon on dark mode</li>
+          <li>- New settings UI</li>
+          <li>- Experimental - AIG formatter</li>
+        </ul>
+      ]]></description>
+      <enclosure
+        url="https://github.com/fayazara/Kaze/releases/download/v0.81/Kaze.dmg"
+        type="application/octet-stream"
+        sparkle:edSignature="khk6b3MQppd5T677spFIB4s+zs486ZYcwDiE9YDtbjwLYJQ/VoRevCPU6XyxcY4gDJ6FDzLNnuvJnYvpROrtCg=="
+        length="6780327"
+      />
+    </item>
+
+    <item>
       <title>Version 0.80</title>
       <sparkle:version>12</sparkle:version>
       <sparkle:shortVersionString>0.80</sparkle:shortVersionString>
