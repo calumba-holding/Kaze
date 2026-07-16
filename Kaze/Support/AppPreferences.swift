@@ -47,7 +47,7 @@ enum AppPreferenceKey {
         or numbers explicitly.
         - Detect spoken cues like "new line", "next line", "new paragraph", \
         "next paragraph", "bullet point", "dash", "next item" and replace them with \
-        the corresponding formatting — remove the spoken cue word itself.
+        the corresponding formatting; remove the spoken cue word itself.
 
         Return ONLY the formatted transcription text. Nothing else.
         """

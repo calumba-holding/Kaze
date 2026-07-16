@@ -10,6 +10,7 @@ struct KazeApp: App {
     var body: some Scene {
         Settings {
             ContentView(
+                appleSpeechModelManager: appDelegate.appleSpeechModelManager,
                 whisperModelManager: appDelegate.whisperModelManager,
                 parakeetModelManager: appDelegate.parakeetModelManager,
                 historyManager: appDelegate.historyManager,
@@ -27,7 +28,8 @@ struct KazeApp: App {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    private let speechTranscriber = SpeechTranscriber()
+    let appleSpeechModelManager = AppleSpeechModelManager()
+    private lazy var speechTranscriber = SpeechTranscriber(modelManager: appleSpeechModelManager)
     private var whisperTranscriber: WhisperTranscriber?
     private var fluidAudioTranscriber: FluidAudioTranscriber?
     let whisperModelManager = WhisperModelManager()
@@ -158,7 +160,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             formatter = TextFormatter()
         }
 
-        // Menu bar icon — use a dark/light appearance-aware icon
+        // Menu bar icon uses a dark/light appearance-aware image.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         updateStatusBarIcon()
         if let button = statusItem?.button {
@@ -181,11 +183,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !UserDefaults.standard.bool(forKey: AppPreferenceKey.hasCompletedOnboarding) {
             showOnboarding()
         } else {
-            // Already completed onboarding — set up hotkey (permissions should already be granted)
+            // Already completed onboarding, so set up the hotkey (permissions should already be granted).
             Task {
                 await requestPermissionsAndSetupHotkey()
             }
         }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Task { await appleSpeechModelManager.refreshStatus() }
     }
 
     private func migrateLegacyPreferences() {
@@ -205,9 +211,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             defaults.set(TranscriptionEngine.parakeet.rawValue, forKey: AppPreferenceKey.transcriptionEngine)
         }
 
-        let legacyQwenDirectory = Qwen3AsrModels.defaultCacheDirectory()
-        if FileManager.default.fileExists(atPath: legacyQwenDirectory.path) {
-            try? FileManager.default.removeItem(at: legacyQwenDirectory)
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let legacyQwenDirectory = appSupport
+                .appendingPathComponent("FluidAudio/Models/qwen3-asr-0.6b-coreml/f32", isDirectory: true)
+            if FileManager.default.fileExists(atPath: legacyQwenDirectory.path) {
+                try? FileManager.default.removeItem(at: legacyQwenDirectory)
+            }
         }
     }
 
@@ -263,6 +272,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func observeModelState() {
         lastWhisperModelState = whisperModelManager.state
         lastParakeetModelState = parakeetModelManager.state
+
+        appleSpeechModelManager.$state
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItemIndicator()
+            }
+            .store(in: &cancellables)
 
         whisperModelManager.$state
             .receive(on: RunLoop.main)
@@ -320,6 +336,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showOnboarding() {
         let onboardingView = OnboardingView(
+            appleSpeechModelManager: appleSpeechModelManager,
             whisperModelManager: whisperModelManager,
             parakeetModelManager: parakeetModelManager
         ) { [weak self] in
@@ -378,7 +395,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Requests microphone permissions (if needed) and sets up the global hotkey.
     /// Called after onboarding completes or on subsequent launches.
     func requestPermissionsAndSetupHotkey() async {
-        // Request microphone permission silently — if already granted this returns immediately
+        // Request microphone permission silently. If already granted, this returns immediately.
         _ = await speechTranscriber.requestPermissions()
         setupHotkey()
     }
@@ -440,6 +457,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeSettingsContent(initialTab: SettingsTab) -> AnyView {
         AnyView(ContentView(
+            appleSpeechModelManager: appleSpeechModelManager,
             whisperModelManager: whisperModelManager,
             parakeetModelManager: parakeetModelManager,
             historyManager: historyManager,
@@ -494,7 +512,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let started = hotkeyManager.start()
         if !started {
-            print("[Kaze] Accessibility permission not granted yet — hotkey will not work until granted.")
+            print("[Kaze] Accessibility permission not granted yet; hotkey will not work until granted.")
         }
 
         // Observe changes to hotkey mode preference (Fix #6: early-exit avoids
@@ -537,11 +555,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Check if the selected engine's model is available
         if preferredEngine.requiresModelDownload && !preferredEngine.isModelReady(
+            appleManager: appleSpeechModelManager,
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager
         ) {
-            print("\(preferredEngine.title) model not ready, falling back to Direct Dictation")
-            engine = .dictation
+            if preferredEngine != .dictation, TranscriptionEngine.dictation.isModelReady(
+                appleManager: appleSpeechModelManager,
+                whisperManager: whisperModelManager,
+                parakeetManager: parakeetModelManager
+            ) {
+                print("\(preferredEngine.title) model not ready, falling back to Direct Dictation")
+                engine = .dictation
+            } else {
+                print("\(preferredEngine.title) model is not ready")
+                if preferredEngine == .dictation {
+                    openSettingsWindow(initialTab: .general)
+                }
+                return
+            }
         } else {
             engine = preferredEngine
         }
@@ -555,6 +586,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Use the appropriate transcriber
         if engine == .whisper, engine.isModelReady(
+            appleManager: appleSpeechModelManager,
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager
         ) {
@@ -577,6 +609,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             whisper.startRecording()
         } else if engine == .parakeet, engine.isModelReady(
+            appleManager: appleSpeechModelManager,
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager
         ) {
@@ -597,7 +630,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayWindow.show(state: overlayState, notchMode: notchModeEnabled)
             transcriber.startRecording()
         } else {
-            speechTranscriber.customWords = words
             speechTranscriber.selectedDeviceUID = micUID
             speechTranscriber.onTranscriptionFinished = { [weak self] (text: String) in
                 guard let self else { return }
@@ -624,7 +656,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         if engine == .whisper {
             (session.transcriber as? WhisperTranscriber)?.stopRecording()
-            // For Whisper, transcription happens after stop — the overlay stays visible
+            // For Whisper, transcription happens after stop, so the overlay stays visible
             // until onTranscriptionFinished fires via processTranscription
             overlayState.isEnhancing = true // Show processing state while Whisper works
             overlayState.processingStatusText = processingStatusText(for: .whisper)
@@ -635,16 +667,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             overlayState.processingStatusText = processingStatusText(for: engine)
         } else {
             (session.transcriber as? SpeechTranscriber)?.stopRecording()
-            let waitingForAI = session.enhancementMode == .appleIntelligence && enhancer != nil
-            if !waitingForAI {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                    self?.overlayWindow.hide(state: self?.overlayState)
-                    self?.isSessionActive = false
-                    self?.activeSession = nil
-                    self?.updateStatusItemIndicator()
-                    self?.scheduleIdleModelUnload()
-                }
-            }
+            overlayState.isEnhancing = true
+            overlayState.processingStatusText = "Finalizing..."
         }
     }
 

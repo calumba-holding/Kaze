@@ -379,7 +379,6 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kaze needs microphone access to transcribe your speech.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kaze uses on-device speech recognition to convert your voice to text.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -422,7 +421,6 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kaze needs microphone access to transcribe your speech.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Kaze uses on-device speech recognition to convert your voice to text.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

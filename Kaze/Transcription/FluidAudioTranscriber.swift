@@ -186,8 +186,7 @@ class FluidAudioModelManager: ObservableObject {
             case .parakeet:
                 let dir = AsrModels.defaultCacheDirectory(for: .v3)
                 let asrModels = try await AsrModels.load(from: dir, version: .v3)
-                let manager = AsrManager(config: .default)
-                try await manager.initialize(models: asrModels)
+                let manager = AsrManager(config: .default, models: asrModels)
                 await MainActor.run { parakeetManager = manager }
             }
         }
@@ -211,7 +210,8 @@ class FluidAudioModelManager: ObservableObject {
             guard let manager = parakeetManager else {
                 throw FluidAudioTranscriberError.modelNotLoaded
             }
-            let result = try await manager.transcribe(audioURL, source: .system)
+            var decoderState = try TdtDecoderState(decoderLayers: await manager.decoderLayerCount)
+            let result = try await manager.transcribe(audioURL, decoderState: &decoderState)
             return normalizeTranscript(result.text)
         }
     }

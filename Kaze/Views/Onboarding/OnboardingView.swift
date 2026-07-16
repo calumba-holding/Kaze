@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 import Carbon
 import AVFoundation
-import Speech
 
 // MARK: - Onboarding View
 
@@ -19,6 +18,7 @@ struct OnboardingView: View {
     @State private var activePermissionRequests = Set<PermissionKind>()
 
     // Model managers
+    @ObservedObject var appleSpeechModelManager: AppleSpeechModelManager
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
     @StateObject private var hotkeyRecorder = HotkeyShortcutRecorder()
@@ -44,6 +44,7 @@ struct OnboardingView: View {
     /// Whether the selected model is currently downloading.
     private var isModelDownloading: Bool {
         selectedEngine.isModelDownloading(
+            appleManager: appleSpeechModelManager,
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager
         )
@@ -52,6 +53,7 @@ struct OnboardingView: View {
     /// Whether the selected model has been downloaded (or doesn't need one).
     private var isModelReady: Bool {
         selectedEngine.isModelReady(
+            appleManager: appleSpeechModelManager,
             whisperManager: whisperModelManager,
             parakeetManager: parakeetModelManager
         )
@@ -93,7 +95,7 @@ struct OnboardingView: View {
                     Button("Back") {
                         hotkeyRecorder.stop()
                         if currentStep == 5 && !selectedEngine.requiresModelDownload {
-                            // Skipped model download step — go back to engine selection
+                            // Skipped model download step, go back to engine selection.
                             currentStep = 3
                         } else {
                             currentStep -= 1
@@ -122,7 +124,7 @@ struct OnboardingView: View {
                     .keyboardShortcut(.return, modifiers: [])
                     .controlSize(.regular)
                     .buttonStyle(.borderedProminent)
-                    .disabled(currentStep == 4 && isModelDownloading) // Can't advance during download
+                    .disabled(currentStep == 4 && (!isModelReady || isModelDownloading))
                 } else {
                     Button("Get Started") {
                         hotkeyShortcut.saveToDefaults()
@@ -536,7 +538,7 @@ struct OnboardingView: View {
             Text("Download Model")
                 .font(.title2.bold())
 
-            Text("\(selectedEngine.title) requires a model download.\nThis only needs to happen once.")
+            Text("\(selectedEngine.title) requires a one-time model download.\nThis only needs to happen once.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -555,14 +557,66 @@ struct OnboardingView: View {
     @ViewBuilder
     private var modelDownloadStatusView: some View {
         switch selectedEngine {
+        case .dictation:
+            onboardingAppleSpeechStatus
         case .whisper:
             onboardingWhisperStatus
         case .parakeet:
             onboardingFluidAudioStatus(manager: parakeetModelManager, model: .parakeet)
-        default:
-            Text("No download required.")
+        }
+    }
+
+    @ViewBuilder
+    private var onboardingAppleSpeechStatus: some View {
+        switch appleSpeechModelManager.state {
+        case .checking:
+            VStack(spacing: 8) {
+                ProgressView()
+                Text("Checking the system model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .notDownloaded:
+            VStack(spacing: 10) {
+                Text("Apple Speech system model")
+                    .font(.system(size: 13, weight: .medium))
+                Button("Download Model") {
+                    Task { await appleSpeechModelManager.downloadModel() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            }
+        case .downloading(let progress):
+            VStack(spacing: 8) {
+                ProgressView(value: progress)
+                    .frame(maxWidth: 240)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Button("Cancel", role: .destructive) {
+                    appleSpeechModelManager.cancelDownload()
+                }
+                .controlSize(.small)
+            }
+        case .ready:
+            Label("System model ready", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.green)
+        case .unsupported:
+            Label("Apple Speech does not support this Mac or system language.", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.red)
+        case .error(let message):
+            VStack(spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Retry") {
+                    Task { await appleSpeechModelManager.downloadModel() }
+                }
+                .controlSize(.small)
+            }
         }
     }
 
