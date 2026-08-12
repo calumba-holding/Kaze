@@ -23,11 +23,11 @@ The app lives entirely in the menu bar with no Dock icon. On first launch, a gui
 
 > **Personal recommendation** -- use **Parakeet v3 (NVIDIA)** for the best overall results.
 
-Kaze ships with **4 fully on-device transcription engines**:
+Kaze ships with **3 fully on-device transcription engines**:
 
 | Engine | Framework | Notes |
 |---|---|---|
-| **Direct Dictation** | Apple `SFSpeechRecognizer` | Zero setup, real-time streaming, uses device locale |
+| **Direct Dictation** | Apple `SpeechAnalyzer` + `SpeechTranscriber` | Real-time streaming, uses device locale and a system-managed model |
 | **Whisper (OpenAI)** | [WhisperKit](https://github.com/argmaxinc/WhisperKit) | Local model variants: Tiny, Base, Small, Large v3 Turbo |
 | **Parakeet v3 (NVIDIA)** | [FluidAudio](https://github.com/FluidInference/FluidAudio) | Fast, high-accuracy English ASR (~600 MB CoreML model) |
 
@@ -36,7 +36,7 @@ Kaze ships with **4 fully on-device transcription engines**:
 - **One-click download/remove** in Settings -- view readiness status and model size on disk
 - **Cancel in-progress downloads** at any time
 - **Idle model unloading** -- models automatically free memory after 90 seconds of inactivity
-- **Graceful fallback** -- if a selected model is unavailable, Kaze falls back to Direct Dictation
+- **Graceful fallback** -- if a selected model is unavailable and Direct Dictation is ready, Kaze falls back to it
 
 ### Recording overlay
 
@@ -68,12 +68,12 @@ Kaze ships with **4 fully on-device transcription engines**:
 
 ### Onboarding
 
-- **4-step guided setup** on first launch: Welcome, Hotkey configuration, Engine selection, and Completion summary
+- **6-step guided setup** on first launch: Welcome, permissions, hotkey configuration, engine selection, model download, and completion summary
 - Preferences are saved automatically as you complete each step
 
 ### Other features
 
-- **Custom vocabulary/keywords** -- add names, abbreviations, and domain terms to improve recognition across all engines
+- **Custom vocabulary/keywords** -- improve Whisper recognition and preserve exact spelling during AI enhancement
 - **Transcription history** -- persistent local history (latest 50 entries) with engine labels, "Enhanced" badge, relative timestamps, and one-click copy
 - **Clipboard-safe auto-paste** -- saves and restores your clipboard contents around each paste
 - **Trailing space option** -- optionally append a space after each transcription
@@ -86,7 +86,7 @@ Kaze ships with **4 fully on-device transcription engines**:
 | Layer | Technology |
 |---|---|
 | UI | **SwiftUI** + **AppKit** -- SwiftUI for Settings/Onboarding/Overlay views; AppKit for menu bar, floating panel, clipboard, and simulated key events |
-| Speech | **Apple Speech framework** (`SFSpeechRecognizer`) for real-time streaming dictation |
+| Speech | **Apple Speech framework** (`SpeechAnalyzer` + `SpeechTranscriber`) for on-device real-time dictation |
 | Whisper | [**WhisperKit**](https://github.com/argmaxinc/WhisperKit) for local OpenAI Whisper transcription |
 | Parakeet | [**FluidAudio**](https://github.com/FluidInference/FluidAudio) for Parakeet v3 CoreML runtime |
 | Enhancement | **Foundation Models** (Apple Intelligence on-device LLM) for text cleanup |
@@ -101,7 +101,6 @@ Kaze ships with **4 fully on-device transcription engines**:
 - Xcode 26+ (for building from source)
 - Accessibility permission (for global hotkey)
 - Microphone permission
-- Speech Recognition permission (used by Direct Dictation)
 
 ## Building from source
 

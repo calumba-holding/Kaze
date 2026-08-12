@@ -20,7 +20,7 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
 
     var description: String {
         switch self {
-        case .dictation: return "Uses Apple's built-in speech recognition. Works immediately with no setup."
+        case .dictation: return "Uses Apple's latest on-device SpeechTranscriber. The system language model may need a one-time download."
         case .whisper: return "Uses OpenAI's Whisper model running locally on your Mac. Requires a one-time download."
         case .parakeet: return "NVIDIA's Parakeet TDT 0.6B v3 via CoreML. Top-ranked accuracy, blazing fast. English only."
         }
@@ -33,26 +33,25 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
         case .whisper:
             return "OpenAI's Whisper running locally. Multiple sizes available."
         case .dictation:
-            return "Apple's built-in speech recognition. No download required."
+            return "Apple's most accurate on-device speech model. A system-managed download may be required."
         }
     }
 
     var requiresModelDownload: Bool {
         switch self {
-        case .dictation:
-            return false
-        case .whisper, .parakeet:
+        case .dictation, .whisper, .parakeet:
             return true
         }
     }
 
     func isModelReady(
+        appleManager: AppleSpeechModelManager,
         whisperManager: WhisperModelManager,
         parakeetManager: FluidAudioModelManager
     ) -> Bool {
         switch self {
         case .dictation:
-            return true
+            return appleManager.isReady
         case .whisper:
             return whisperManager.isAvailableForTranscription
         case .parakeet:
@@ -61,12 +60,13 @@ enum TranscriptionEngine: String, CaseIterable, Identifiable {
     }
 
     func isModelDownloading(
+        appleManager: AppleSpeechModelManager,
         whisperManager: WhisperModelManager,
         parakeetManager: FluidAudioModelManager
     ) -> Bool {
         switch self {
         case .dictation:
-            return false
+            return appleManager.isDownloading
         case .whisper:
             return whisperManager.isDownloading
         case .parakeet:

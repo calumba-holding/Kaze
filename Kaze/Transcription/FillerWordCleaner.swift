@@ -20,10 +20,10 @@ enum FillerWordCleaner {
         // consume the comma + optional space so the sentence reads naturally.
         //
         // Pattern explanation:
-        //   \b          – word boundary before the filler
-        //   (filler)    – one of the filler patterns
-        //   \b          – word boundary after the filler
-        //   [,;]?\s*    – optional trailing comma/semicolon and whitespace
+        //   \b          - word boundary before the filler
+        //   (filler)    - one of the filler patterns
+        //   \b          - word boundary after the filler
+        //   [,;]?\s*    - optional trailing comma/semicolon and whitespace
         for pattern in fillerPatterns {
             let regex = "\\b\(pattern)\\b[,;]?\\s*"
             result = result.replacingOccurrences(
@@ -81,12 +81,12 @@ enum FillerWordCleaner {
     /// Each pattern uses character repetition to catch elongated forms
     /// (e.g. "uhhh", "ummm") that ASR models sometimes produce.
     private static let fillerPatterns: [String] = [
-        "u+h+",          // uh, uhh, uhhh, uuhhh …
-        "u+m+",          // um, umm, ummm …
-        "e+r+m+",        // erm, errm, errrm …
-        "h+m+",          // hm, hmm, hmmm …
-        "a+h+",          // ah, ahh, ahhh …
-        "m+h+m+",        // mhm, mhmm …
-        "h+u+h+",        // huh, huhh …
+        "u+h+",          // uh, uhh, uhhh, uuhhh, etc.
+        "u+m+",          // um, umm, ummm, etc.
+        "e+r+m+",        // erm, errm, errrm, etc.
+        "h+m+",          // hm, hmm, hmmm, etc.
+        "a+h+",          // ah, ahh, ahhh, etc.
+        "m+h+m+",        // mhm, mhmm, etc.
+        "h+u+h+",        // huh, huhh, etc.
     ]
 }

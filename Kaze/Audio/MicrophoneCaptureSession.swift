@@ -73,6 +73,10 @@ final class MicrophoneCaptureSession: NSObject, AVCaptureAudioDataOutputSampleBu
 
             audioOutput = AVCaptureAudioDataOutput()
         }
+
+        // Ensure no captured buffers are still waiting to be delivered before callers
+        // close their transcription input stream.
+        sampleBufferQueue.sync {}
     }
 
     private func configureSession(deviceUID: String?) throws {

@@ -27,7 +27,7 @@ struct WaveformView: View {
     private var cornerRadius: CGFloat { isCompact ? 24 : 20 }
     private var textOverflows: Bool { transcribedText.count > 38 }
 
-    // Notch mode corner radii — fixed so width never shifts
+    // Notch mode corner radii are fixed so width never shifts.
     private let notchTopCornerRadius: CGFloat = 8
     private let notchBottomCornerRadius: CGFloat = 10
 
@@ -157,7 +157,7 @@ struct WaveformView: View {
     }
 
     /// Width of the notch content.
-    /// Fixed width — only height changes when text appears.
+    /// Fixed width; only height changes when text appears.
     private var notchContentWidth: CGFloat {
         notchVisible ? 280 : 0
     }
@@ -313,7 +313,7 @@ struct WaveformView: View {
         }
     }
 
-    /// Gentle wave pattern for processing bars — subtle, low variance
+    /// Gentle wave pattern for processing bars with subtle, low variance.
     private func processingBarHeight(for index: Int) -> CGFloat {
         let phase = phases[index]
         let sine = (sin(phase) + 1) / 2

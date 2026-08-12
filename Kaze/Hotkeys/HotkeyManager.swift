@@ -156,7 +156,7 @@ class HotkeyManager {
                         // In key-based mode, flagsChanged only matters when the key is
                         // already held (to detect modifier release during hold-to-talk).
                         // We can't cheaply check isKeyDown here without a lock, so let
-                        // these through — they're infrequent compared to keyDown/keyUp.
+                        // these through because they're infrequent compared to keyDown/keyUp.
                         break
                     default:
                         return Unmanaged.passUnretained(event)

@@ -56,6 +56,7 @@ private enum AppVersion {
 // MARK: - Root View
 
 struct ContentView: View {
+    @ObservedObject var appleSpeechModelManager: AppleSpeechModelManager
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
     @ObservedObject var historyManager: TranscriptionHistoryManager
@@ -66,6 +67,7 @@ struct ContentView: View {
     @State private var selectedTab: SettingsTab? = .general
 
     init(
+        appleSpeechModelManager: AppleSpeechModelManager,
         whisperModelManager: WhisperModelManager,
         parakeetModelManager: FluidAudioModelManager,
         historyManager: TranscriptionHistoryManager,
@@ -74,6 +76,7 @@ struct ContentView: View {
         restartOnboarding: @escaping () -> Void,
         initialTab: SettingsTab = .general
     ) {
+        self.appleSpeechModelManager = appleSpeechModelManager
         self.whisperModelManager = whisperModelManager
         self.parakeetModelManager = parakeetModelManager
         self.historyManager = historyManager
@@ -115,6 +118,7 @@ struct ContentView: View {
         switch tab {
         case .general:
             GeneralSettingsView(
+                appleSpeechModelManager: appleSpeechModelManager,
                 whisperModelManager: whisperModelManager,
                 parakeetModelManager: parakeetModelManager
             )
@@ -246,6 +250,7 @@ private struct GeneralSettingsView: View {
     @State private var availableMicrophones: [AudioInputDevice] = []
     @StateObject private var audioDeviceObserver = AudioDeviceObserver()
 
+    @ObservedObject var appleSpeechModelManager: AppleSpeechModelManager
     @ObservedObject var whisperModelManager: WhisperModelManager
     @ObservedObject var parakeetModelManager: FluidAudioModelManager
 
@@ -277,6 +282,10 @@ private struct GeneralSettingsView: View {
                 Text(selectedEngine.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if selectedEngine == .dictation {
+                    appleSpeechModelStatusRow
+                }
 
                 if selectedEngine == .whisper {
                     Picker("Whisper model", selection: Binding(
@@ -363,6 +372,59 @@ private struct GeneralSettingsView: View {
     }
 
     // MARK: - Whisper Model Status
+
+    @ViewBuilder
+    private var appleSpeechModelStatusRow: some View {
+        switch appleSpeechModelManager.state {
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking system model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .notDownloaded:
+            HStack(spacing: 8) {
+                Text("System model not downloaded")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Download") {
+                    Task { await appleSpeechModelManager.downloadModel() }
+                }
+                .controlSize(.small)
+            }
+        case .downloading(let progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress).frame(maxWidth: 140)
+                Text("\(Int(progress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Button("Cancel", role: .destructive) {
+                    appleSpeechModelManager.cancelDownload()
+                }
+                .controlSize(.small)
+            }
+        case .ready:
+            Label("System model ready", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .unsupported:
+            Label("Apple Speech does not support this Mac or system language.", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        case .error(let message):
+            HStack(spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Retry") {
+                    Task { await appleSpeechModelManager.downloadModel() }
+                }
+                .controlSize(.small)
+            }
+        }
+    }
 
     @ViewBuilder
     private var whisperModelStatusRow: some View {
@@ -1436,7 +1498,7 @@ private struct VocabularySettingsView: View {
                     Text("No custom words yet")
                         .font(.body)
                         .foregroundStyle(.secondary)
-                    Text("Add names, abbreviations, and specialised terms.\nKaze will recognise them during transcription.")
+                    Text("Add names, abbreviations, and specialised terms.\nWhisper uses them during transcription; AI enhancement preserves their spelling.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)

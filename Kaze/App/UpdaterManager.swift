@@ -12,7 +12,7 @@ import Sparkle
 final class UpdaterManager: NSObject, ObservableObject {
     /// The underlying Sparkle updater controller.
     /// `startingUpdater: false` defers the initial automatic check until we
-    /// explicitly call `startUpdater()` — this avoids a race with other
+    /// explicitly call `startUpdater()`. This avoids a race with other
     /// first-launch work (permissions, onboarding).
     private let controller: SPUStandardUpdaterController
 

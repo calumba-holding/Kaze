@@ -363,7 +363,7 @@ class WhisperTranscriber: ObservableObject, TranscriberProtocol {
     }
 
     func requestPermissions() async -> Bool {
-        // Whisper only needs microphone access (no SFSpeechRecognizer authorization needed)
+        // On-device engines only need microphone access.
         let micStatus = await AVCaptureDevice.requestAccess(for: .audio)
         return micStatus
     }
